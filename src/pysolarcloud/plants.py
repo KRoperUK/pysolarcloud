@@ -155,6 +155,55 @@ class Plants:
         _LOGGER.debug("async_get_realtime_data: %s", plants)
         return plants
 
+    async def async_get_realtime_device_data(self, device_type: DeviceType | int, ps_key: str | list[str], *, measure_points=None) -> dict:
+        """Return the latest realtime data from one or more devices.
+        
+        device_type: DeviceType - The type of device to query.
+        ps_key: str | list[str] - The key of the device or a list of device keys.
+        measure_points: list[str] - A list of measure points to return. If None, all measure points are returned.
+        Data is returned as a dictionary of dictionaries:
+        {
+            plant_id: {
+                measure_point_code: {
+                    "id": str, # Numerical identifier of the measure point
+                    "code": str, # Readable code of the measure point (see measure_points dict)
+                    "value": float | str,
+                    "unit": str,
+                    "name": str, # Name of the measure point (in the specified language)
+                }
+            }
+        }
+        iSolarCloud data is updated every 5 minutes so polling more frequently than that is not useful.
+        """
+        if isinstance(ps_key, list):
+            ps = ps_key
+        else:
+            ps = [ps_key]
+        if measure_points is None:
+            ms = list(self.measure_points.keys())
+        else:
+            measure_points_map = {v: k for k, v in self.measure_points.items()}
+            ms = [m if m.isdigit() else measure_points_map[m] for m in measure_points]
+        if isinstance(device_type, DeviceType):
+            dt = device_type.value
+        else:
+            dt = device_type
+        uri = "/openapi/platform/getDeviceRealTimeData"
+        res = await self.auth.request(uri, {"ps_key_list": ps, "device_type": dt, "point_id_list": ms[:35], "is_get_point_dict": "1"}, lang=self.lang)
+        res = await res.json()
+        if "error" in res:
+            _LOGGER.error("Error response from %s: %s", uri, res)
+            raise PySolarCloudException(res)
+        point_dict = dict([(str(point["point_id"]), point) for point in res["result_data"]["point_dict"]])
+        devices = {}
+        for dp in res["result_data"]["device_point_list"]:
+            dev = dp["device_point"]
+            data = [self._format_measure_point(k[1:], v, point_dict) for k,v in dev.items() if k[0]=='p' and k[1:].isdigit()]
+            data_as_dict = {d["code"]: d for d in data}
+            devices[str(dev["ps_key"])] = data_as_dict
+        _LOGGER.debug("async_get_realtime_device_data: %s", devices)
+        return devices
+
     async def async_get_historical_data(self, plant_id: str | list[str], start_time: datetime, end_time: datetime = None, *, measure_points=None, interval=timedelta(minutes=60)) -> dict:
         """Return historical data from one or more plants.
         
@@ -310,4 +359,148 @@ class Plants:
         "83332": "total_pv_yield", # Wh
         "83334": "energy_storage_soc_ems", # 
         "83335": "energy_storage_remaining_charge_ems", # Wh
+        "58601": "battery_voltage", # V
+        "58602": "battery_current", # A
+        "58603": "battery_temperature", # °C
+        "58604": "battery_level",
+        "58605": "battery_health_soh",
+        "58606": "total_battery_charging_energy", # Wh
+        "58607": "total_battery_discharging_energy", # Wh
+        "58608": "battery_operation_status",
+        "58609": "standard_health_status",
+        "58610": "max_cell_voltage", # mV
+        "58611": "position_of_max_cell_voltage",
+        "58612": "min_cell_voltage", # mV
+        "58613": "position_of_min_cell_voltage",
+        "58614": "max_module_temperature", # °C
+        "58615": "position_of_max_module_temperature",
+        "58616": "min_module_temperature", # °C
+        "58617": "position_of_min_module_temperature",
+        "58618": "max_cell_voltage_module_1", # mV
+        "58619": "max_cell_voltage_module_2", # mV
+        "58620": "max_cell_voltage_module_3", # mV
+        "58621": "max_cell_voltage_module_4", # mV
+        "58622": "max_cell_voltage_module_5", # mV
+        "58623": "max_cell_voltage_module_6", # mV
+        "58624": "max_cell_voltage_module_7", # mV
+        "58625": "max_cell_voltage_module_8", # mV
+        "58626": "min_cell_voltage_module_1", # mV
+        "58627": "min_cell_voltage_module_2", # mV
+        "58628": "min_cell_voltage_module_3", # mV
+        "58629": "min_cell_voltage_module_4", # mV
+        "58630": "min_cell_voltage_module_5", # mV
+        "58631": "min_cell_voltage_module_6", # mV
+        "58632": "min_cell_voltage_module_7", # mV
+        "58633": "min_cell_voltage_module_8", # mV
+        "58635": "dc_contactor_status",
+        "58636": "fault_module_id",
+        "13011": "active_power", # W
+        "13003": "total_dc_power", # W
+        "13157": "phase_a_voltage", # V
+        "13158": "phase_b_voltage", # V
+        "13159": "phase_c_voltage", # V
+        "13008": "phase_a_current", # A
+        "13009": "phase_b_current", # A
+        "13010": "phase_c_current", # A
+        "13012": "total_reactive_power", # var
+        "13160": "array_insulation_resistance", # kΩ
+        "13007": "grid_frequency", # Hz
+        "18065": "phase_a_backup_power", # W
+        "18066": "phase_b_backup_power", # W
+        "18067": "phase_c_backup_power", # W
+        "18068": "total_backup_power", # W
+        "18062": "phase_a_backup_current", # A
+        "18063": "phase_b_backup_current", # A
+        "18064": "phase_c_backup_current", # A
+        "13020": "total_operation_time", # H
+        "13134": "total_pv_yield", # Wh
+        "13112": "daily_pv_yield", # Wh
+        "13187": "ac_voltage", # V
+        "13188": "ac_current", # A
+        "13004": "a_b_line_voltage", # V
+        "13005": "b_c_line_voltage", # V
+        "13006": "c_a_line_voltage", # V
+        "13019": "internal_air_temperature", # °C
+        "13161": "bus_voltage", # V
+        "13013": "total_power_factor",
+        "13001": "mppt1_voltage", # V
+        "13002": "mppt1_current", # A
+        "13105": "mppt2_voltage", # V
+        "13106": "mppt2_current", # A
+        "13107": "mppt3_voltage", # V
+        "13108": "mppt3_current", # A
+        "13109": "mppt4_voltage", # V
+        "13110": "mppt4_current", # A
+        "13122": "feed_in_energy_today", # Wh
+        "13125": "total_feed_in_energy", # Wh
+        "13147": "energy_purchased_today", # Wh
+        "13148": "total_purchased_energy", # Wh
+        "13149": "purchased_power", # W
+        "13121": "feed_in_power", # W
+        "13173": "feed_in_energy_today_pv", # Wh
+        "13175": "total_feed_in_energy_pv", # Wh
+        "13141": "battery_level", # SOC
+        "13029": "daily_battery_discharging_energy", # Wh
+        "13028": "daily_battery_charging_energy", # Wh
+        "13138": "battery_voltage", # V
+        "13139": "battery_current", # A
+        "13035": "total_battery_discharging_energy", # Wh
+        "13034": "total_battery_charging_energy", # Wh
+        "13142": "battery_health_soh",
+        "13143": "battery_temperature", # °C
+        "13162": "max_charging_current_bms", # A
+        "13163": "max_discharging_current_bms", # A
+        "13174": "daily_battery_charging_energy_from_pv", # Wh
+        "13176": "total_battery_charging_energy_from_pv", # Wh
+        "13126": "battery_charging_power", # W
+        "13150": "battery_discharging_power", # W
+        "13199": "daily_load_consumption", # Wh
+        "13137": "total_load_energy_consumption_from_pv", # Wh
+        "13119": "load_power", # W
+        "13130": "total_load_consumption", # Wh
+        "13116": "daily_direct_energy_consumption", # Wh
+        "13144": "daily_self_consumption_rate",
+        "13016": "total_charging_time", # H
+        "13017": "total_discharging_time", # H
+        "13018": "total_apparent_power", # VA
+        "13023": "daily_charging_time", # H
+        "13024": "daily_discharging_time", # H
+        "13118": "annual_direct_energy_consumption", # Wh
+        "13165": "mdsp_off_grid_start_up_status",
+        "13166": "sdsp_working_mode",
+        "13167": "sdsp_off_grid_start_status",
+        "13168": "di_status",
+        "13169": "battery_voltage_bms", # V
+        "13170": "battery_soc_bms",
+        "13171": "ems_status",
+        "13172": "daily_self_sufficiency_rate",
+        "13140": "battery_capacity_kwh", # Wh
+        "18075": "channel_2_total_apparent_power", # VA
+        "18076": "channel_2_phase_a_apparent_power", # VA
+        "18077": "channel_2_phase_b_apparent_power", # VA
+        "18078": "channel_2_phase_c_apparent_power", # VA
+        "18079": "channel_2_total_active_power", # W
+        "18080": "channel_2_phase_a_active_power", # W
+        "18081": "channel_2_phase_b_active_power", # W
+        "18082": "channel_2_phase_c_active_power", # W
+        "18083": "channel_2_total_reactive_power", # var
+        "18084": "channel_2_phase_a_reactive_power", # var
+        "18085": "channel_2_phase_b_reactive_power", # var
+        "18086": "channel_2_phase_c_reactive_power", # var
+        "18087": "channel_2_power_factor",
+        "18088": "channel_2_total_purchased_energy", # Wh
+        "18089": "channel_2_phase_a_purchased_energy", # Wh
+        "18090": "channel_2_phase_b_purchased_energy", # Wh
+        "18091": "channel_2_phase_c_purchased_energy", # Wh
+        "18092": "channel_2_total_feed_in_energy", # Wh
+        "18093": "channel_2_phase_a_feed_in_energy", # Wh
+        "18094": "channel_2_phase_b_feed_in_energy", # Wh
+        "18095": "channel_2_phase_c_feed_in_energy", # Wh
+        "18103": "phase_a_backup_voltage", # V
+        "18104": "phase_b_backup_voltage", # V
+        "18105": "phase_c_backup_voltage", # V
+        "18108": "meter_phase_a_voltage", # V
+        "18109": "meter_phase_b_voltage", # V
+        "18110": "meter_phase_c_voltage", # V
+        "13146": "operating_status",
     }
