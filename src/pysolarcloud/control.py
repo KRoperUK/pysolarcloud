@@ -19,15 +19,15 @@ class Control:
             supported = data["result_data"]["dev_result_list"][0]["check_result"]
             if supported == "1":
                 return True
-            elif supported == "0":
+            else:
                 return False
         raise PySolarCloudException(f"Could not check support for device {device_uuid} set_type {set_type}: {data}")
 
-    async def async_check_read_support(self, device_uuid: str) -> bool:    
+    async def async_check_read_support(self, device_uuid: str) -> bool:
         """Check if the device supports read operations."""
         return await self.async_param_config_verification(device_uuid, 2)
 
-    async def async_check_update_support(self, device_uuid: str) -> bool:    
+    async def async_check_update_support(self, device_uuid: str) -> bool:
         """Check if the device supports read operations."""
         return await self.async_param_config_verification(device_uuid, 0)
 
@@ -86,7 +86,7 @@ class Control:
         """Update parameters to the device."""
         uri = "/openapi/platform/paramSetting"
         param_codes = {v: k for k, v in self.config_parameters.items()}
-        plist = [ { "param_code": param_codes.get(str(p),str(p)), "set_value": str(v) } for p,v in param_values ]
+        plist = [ { "param_code": param_codes.get(str(p),str(p)), "set_value": str(v) } for p,v in param_values.items() ]
         _LOGGER.debug("async_update_parameters: param_valuest=%s", plist)
         params = {
             "set_type": 0,
@@ -105,6 +105,38 @@ class Control:
             results = await self.wait_for_task(device_uuid, task_id)
             return [self._format_param_readout(param, param["set_value"]) for param in results]
         raise PySolarCloudException(f"Could not update parameters of device {device_uuid}: {data}")
+
+    async def async_heartbeat(self, device_uuid: str, interval_seconds: int) -> None:
+        """Send a single External EMS heartbeat (param 10017) and return.
+
+        The iSolarCloud API expects the heartbeat value to be the polling interval itself
+        (1-1000 seconds, see Appendix 10 of the developer portal). When the EMS stops sending
+        heartbeats the inverter reverts to its default mode.
+
+        For a long-running heartbeat use :meth:`heartbeat_loop` instead.
+        """
+        if not 1 <= interval_seconds <= 1000:
+            raise ValueError("heartbeat interval must be between 1 and 1000 seconds")
+        await self.async_update_parameters(device_uuid, {"external_ems_heartbeat": str(interval_seconds)})
+
+    async def heartbeat_loop(self, device_uuid: str, interval_seconds: int, stop_event: asyncio.Event) -> None:
+        """Continuously send External EMS heartbeats until *stop_event* is set.
+
+        Each heartbeat refreshes param 10017 to *interval_seconds*. Sleeps
+        ``interval_seconds`` between heartbeats so the inverter never times out.
+        """
+        if not 1 <= interval_seconds <= 1000:
+            raise ValueError("heartbeat interval must be between 1 and 1000 seconds")
+        while not stop_event.is_set():
+            try:
+                await self.async_heartbeat(device_uuid, interval_seconds)
+            except PySolarCloudException as err:
+                _LOGGER.warning("EMS heartbeat failed for %s: %s", device_uuid, err)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+            except asyncio.TimeoutError:
+                continue
+            return
 
     def _format_param_readout(self, param: str, value: str) -> dict:
         """Format the parameter response."""
@@ -128,6 +160,21 @@ class Control:
             except ValueError:
                 pass
         return readout
+
+    # Canonical name -> on-the-wire value for the `charge_discharge_command` parameter
+    # (10004). The API returns either the numeric value or one of these names depending
+    # on firmware.
+    CHARGE_DISCHARGE_COMMANDS = {
+        "stop": "204",
+        "charge": "170",
+        "discharge": "187",
+    }
+
+    # Canonical name -> on-the-wire value for `forced_charging` (10065).
+    FORCED_CHARGING = {
+        "disable": "85",
+        "enable": "170",
+    }
 
     config_parameters = {
         "10001": "soc_upper_limit",

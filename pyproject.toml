@@ -1,10 +1,11 @@
 [project]
-name = "pysolarcloud"
-version = "0.4.0"
+name = "sungrow-isolarcloud"
+version = "0.5.0"
 authors = [
   { name="Tore Green", email="bugjam@e-dreams.dk" },
+  { name="KRoperUK" },
 ]
-description = "A library to interact with Sungrow's iSolarCloud API"
+description = "A library to interact with Sungrow's iSolarCloud API (KRoperUK fork with battery, EV charger and dispatch extensions)"
 readme = "README.md"
 requires-python = ">=3.7"
 classifiers = [
@@ -24,5 +25,5 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project.urls]
-Homepage = "https://github.com/bugjam/pysolarcloud"
-Issues = "https://github.com/bugjam/pysolarcloud/issues"
+Homepage = "https://github.com/KRoperUK/pysolarcloud"
+Issues = "https://github.com/KRoperUK/pysolarcloud/issues"

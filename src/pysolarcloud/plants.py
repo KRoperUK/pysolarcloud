@@ -100,7 +100,7 @@ class Plants:
         res.raise_for_status()
         data = await res.json()
         if "error" in data:
-            _LOGGER.error("Error response from %s: %s", uri, res)
+            _LOGGER.error("Error response from %s: %s", uri, data)
             raise PySolarCloudException(res)
         devices = data["result_data"]["pageList"]
         for device in devices:
@@ -112,11 +112,22 @@ class Plants:
         _LOGGER.debug("async_get_plant_devices: %s", devices)
         return devices
 
-    async def async_get_realtime_data(self, plant_id: str | list[str], *, measure_points=None) -> dict:
+    async def async_get_realtime_data(
+        self,
+        plant_id: str | list[str],
+        *,
+        measure_points=None,
+        extra_measure_points: dict[str, str] | None = None,
+    ) -> dict:
         """Return the latest realtime data from one or more plants.
-        
+
         plant_id: str | list[str] - The ID of the plant or a list of plant IDs.
         measure_points: list[str] - A list of measure points to return. If None, all measure points are returned.
+        extra_measure_points: dict[str, str] - Mapping of additional point_id -> code pairs to
+            request alongside the defaults. Useful for surfacing fields the upstream library
+            hasn't catalogued (e.g. newer battery or EV-charger point IDs). Returned data points
+            use the codes supplied here verbatim.
+
         Data is returned as a dictionary of dictionaries:
         {
             plant_id: {
@@ -135,10 +146,16 @@ class Plants:
             ps = plant_id
         else:
             ps = [plant_id]
+        # Merge the canonical measure_points map with any caller-supplied extras for this call
+        # only — we deliberately do not mutate the class-level dict so concurrent callers and
+        # other Plants instances see the upstream defaults.
+        effective_points = dict(self.measure_points)
+        if extra_measure_points:
+            effective_points.update(extra_measure_points)
         if measure_points is None:
-            ms = list(self.measure_points.keys())
+            ms = list(effective_points.keys())
         else:
-            measure_points_map = {v: k for k, v in self.measure_points.items()}
+            measure_points_map = {v: k for k, v in effective_points.items()}
             ms = [m if m.isdigit() else measure_points_map[m] for m in measure_points]
         uri = "/openapi/platform/getPowerStationRealTimeData"
         res = await self.auth.request(uri, {"ps_id_list": ps, "point_id_list": ms, "is_get_point_dict": "1"}, lang=self.lang)
@@ -149,15 +166,80 @@ class Plants:
         point_dict = dict([(str(point["point_id"]), point) for point in res["result_data"]["point_dict"]])
         plants = {}
         for plant in res["result_data"]["device_point_list"]:
-            data = [self._format_measure_point(k[1:], v, point_dict) for k,v in plant.items() if k[0]=='p' and k[1:].isdigit()]
+            data = [self._format_measure_point(k[1:], v, point_dict, effective_points) for k,v in plant.items() if k[0]=='p' and k[1:].isdigit()]
             data_as_dict = {d["code"]: d for d in data}
             plants[str(plant["ps_id"])] = data_as_dict
         _LOGGER.debug("async_get_realtime_data: %s", plants)
         return plants
 
+    async def async_get_device_realtime(
+        self,
+        plant_id: str,
+        device_type: DeviceType | int | str,
+        *,
+        extra_measure_points: dict[str, str] | None = None,
+    ) -> dict:
+        """Best-effort device-level realtime fetch for non-inverter devices.
+
+        The iSolarCloud plant realtime endpoint aggregates all points at the plant level and does
+        not separate per-device data for chargers, batteries, etc. Some accounts / regions expose
+        a per-device endpoint; when it is not available, this method returns an empty dict rather
+        than raising, so callers can feature-detect gracefully.
+
+        Returns a dict keyed by device uuid, each value being the same measure-point structure as
+        :meth:`async_get_realtime_data`.
+        """
+        if isinstance(device_type, DeviceType):
+            type_id = device_type.value
+        else:
+            type_id = int(device_type)
+        effective_points = dict(self.measure_points)
+        if extra_measure_points:
+            effective_points.update(extra_measure_points)
+        uri = "/openapi/platform/getDeviceRealTimeData"
+        res = await self.auth.request(
+            uri,
+            {
+                "ps_id": str(plant_id),
+                "device_type": str(type_id),
+                "point_id_list": list(effective_points.keys()),
+                "is_get_point_dict": "1",
+            },
+            lang=self.lang,
+        )
+        # Many accounts do not have this endpoint; treat transport / API errors as "unsupported"
+        # and let the caller decide how to surface that. We deliberately swallow only the
+        # "endpoint missing" class of failure, not generic 4xx/5xx.
+        if res.status in (404, 405):
+            _LOGGER.debug("Device realtime endpoint unavailable for plant %s type %s", plant_id, type_id)
+            return {}
+        res = await res.json()
+        if "error" in res:
+            error_code = res["error"].get("error") if isinstance(res["error"], dict) else None
+            if error_code in {"endpoint_not_found", "invalid_request"}:
+                _LOGGER.debug("Device realtime endpoint rejected request: %s", res)
+                return {}
+            _LOGGER.error("Error response from %s: %s", uri, res)
+            raise PySolarCloudException(res)
+        point_dict_items = res.get("result_data", {}).get("point_dict", []) or []
+        point_dict = {str(p["point_id"]): p for p in point_dict_items}
+        device_lists = res.get("result_data", {}).get("device_point_list", []) or []
+        out: dict[str, dict] = {}
+        for device in device_lists:
+            uuid = str(device.get("uuid") or device.get("device_id") or "")
+            if not uuid:
+                continue
+            data = [
+                self._format_measure_point(k[1:], v, point_dict, effective_points)
+                for k, v in device.items()
+                if k[0] == 'p' and k[1:].isdigit()
+            ]
+            out[uuid] = {d["code"]: d for d in data}
+        return out
+
     async def async_get_historical_data(self, plant_id: str | list[str], start_time: datetime, end_time: datetime = None, *, measure_points=None, interval=timedelta(minutes=60)) -> dict:
         """Return historical data from one or more plants.
-        
+
         plant_id: str | list[str] - The ID of the plant or a list of plant IDs.
         start_time: datetime - The start time of the data to retrieve.
         end_time: datetime - The end time of the data to retrieve. If end_time is not specified, 3 hours of data is returned.
@@ -191,8 +273,8 @@ class Plants:
         TS_FORMAT = "%Y%m%d%H%M%S"
         uri = "/openapi/platform/getPowerStationPointMinuteDataList"
         params = {
-            "ps_id_list": ps, 
-            "points": ",".join(["p"+m for m in ms]), 
+            "ps_id_list": ps,
+            "points": ",".join(["p"+m for m in ms]),
             "is_get_point_dict": "1",
             "start_time_stamp": start_time.strftime(TS_FORMAT),
             "end_time_stamp": end_time.strftime(TS_FORMAT),
@@ -216,21 +298,22 @@ class Plants:
                     if k == "time_stamp":
                         continue
                     else:
-                        data = self._format_measure_point(k[1:], v, point_dict)
+                        data = self._format_measure_point(k[1:], v, point_dict, self.measure_points)
                         data["timestamp"] = ts
                     series.append(data)
             plants[str(plant_id)] = series
         _LOGGER.debug("async_get_historical_data: %s", plants)
         return plants
-    
-    def _format_measure_point(self, point_id: str, point_value: str, point_dict: dict) -> dict:
+
+    def _format_measure_point(self, point_id: str, point_value: str, point_dict: dict, measure_points: dict | None = None) -> dict:
         try:
             v = float(point_value) if point_value is not None else None
         except ValueError:
             v = point_value
+        code_map = measure_points if measure_points is not None else self.measure_points
         return {
             "id": point_id,
-            "code": self.measure_points.get(point_id, point_id),
+            "code": code_map.get(point_id, point_id),
             "value": v,
             "unit": point_dict.get(point_id, {}).get("point_unit", None),
             "name": point_dict.get(point_id, {}).get("point_name", None),
@@ -240,25 +323,25 @@ class Plants:
         "83022": "daily_yield", # Wh
         "83024": "total_yield", # Wh
         "83033": "power", # W
-        "83019": "power_fraction", # Plant Power/Installed Power of Plant 
+        "83019": "power_fraction", # Plant Power/Installed Power of Plant
         "83006": "meter_daily_yield", # Wh
         "83020": "meter_total_yield", # Wh
         "83011": "meter_e_daily_consumption", # Wh
         "83021": "accumulative_power_consumption_by_meter", # Wh
         "83032": "meter_ac_power", # W
-        "83007": "meter_pr", # 
+        "83007": "meter_pr", #
         "83002": "inverter_ac_power", # W
         "83009": "inverter_daily_yield", # Wh
         "83004": "inverter_total_yield", # Wh
         "83012": "p_radiation_h", # W/㎡
         "83013": "daily_irradiation", # Wh/㎡
-        "83023": "plant_pr", # 
+        "83023": "plant_pr", #
         "83005": "daily_equivalent_hours", # h
         "83025": "plant_equivalent_hours", # h
         "83018": "daily_yield_theoretical", # Wh
         "83001": "inverter_ac_power_normalization", # W/Wp
         "83008": "daily_equivalent_hours_of_inverter", # h
-        "83010": "inverter_pr", # 
+        "83010": "inverter_pr", #
         "83016": "plant_ambient_temperature", # ℃
         "83017": "plant_module_temperature", # ℃
         "83046": "pcs_total_active_power", # W
@@ -274,9 +357,9 @@ class Plants:
         "83119": "daily_feed_in_energy_pv", # Wh
         "83072": "feed_in_energy_today", # Wh
         "83075": "feed_in_energy_total", # Wh
-        "83252": "battery_level_soc", # 
-        "83129": "battery_soc", # 
-        "83232": "total_field_soc", # 
+        "83252": "battery_level_soc", #
+        "83129": "battery_soc", #
+        "83232": "total_field_soc", #
         "83233": "total_field_maximum_rechargeable_power", # W
         "83234": "total_field_maximum_dischargeable_power", # W
         "83235": "total_field_chargeable_energy", # Wh
@@ -284,17 +367,17 @@ class Plants:
         "83237": "total_field_energy_storage_maximum_reactive_power", # W
         "83238": "total_field_energy_storage_active_power", # W
         "83239": "total_field_reactive_power", # var
-        "83240": "total_field_power_factor", # 
+        "83240": "total_field_power_factor", #
         "83243": "daily_field_charge_capacity", # Wh
         "83241": "total_field_charge_capacity", # Wh
         "83244": "daily_field_discharge_capacity", # Wh
         "83242": "total_field_discharge_capacity", # Wh
-        "83548": "total_number_of_charge_discharge", # 
+        "83548": "total_number_of_charge_discharge", #
         "83549": "grid_active_power", # W
-        "83419": "daily_highest_inverter_power_inverter_installed_capacity", # 
+        "83419": "daily_highest_inverter_power_inverter_installed_capacity", #
         "83317": "power_forecast", # W
         "83318": "planned_es_charging_discharging_power", # W
-        "83319": "planned_es_soc", # 
+        "83319": "planned_es_soc", #
         "83320": "planned_charging_power", # Wh
         "83321": "planned_discharging_power", # Wh
         "83322": "ess_daily_charge_ems", # Wh
@@ -308,6 +391,6 @@ class Plants:
         "83330": "load_active_power_ems", # W
         "83331": "daily_pv_yield_ems", # Wh
         "83332": "total_pv_yield", # Wh
-        "83334": "energy_storage_soc_ems", # 
+        "83334": "energy_storage_soc_ems", #
         "83335": "energy_storage_remaining_charge_ems", # Wh
     }

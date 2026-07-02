@@ -1,6 +1,18 @@
-# pysolarcloud
+# sungrow-isolarcloud
 
-A Python package to interact with the [iSolarCloud API](https://developer-api.isolarcloud.com/) by Sungrow.
+A maintained fork of the [pysolarcloud](https://github.com/bugjam/pysolarcloud) library for interacting with Sungrow's [iSolarCloud API](https://developer-api.isolarcloud.com/).
+
+Install from PyPI:
+
+```
+pip install sungrow-isolarcloud
+```
+
+This fork adds:
+* Support for requesting **additional / custom measure points** without modifying the upstream point map (useful for battery charge/discharge power fields that vary by inverter model).
+* A best-effort **per-device realtime** helper for devices such as EV chargers (`Plants.async_get_device_realtime`).
+* A **heartbeat** helper for External EMS dispatch mode (`Control.async_heartbeat` / `Control.heartbeat_loop`).
+* Convenience constants for dispatch command value sets (`Control.CHARGE_DISCHARGE_COMMANDS`, `Control.FORCED_CHARGING`).
 
 The package supports the following functionality:
 * OAuth2 authentication
@@ -21,12 +33,6 @@ The iSolarCloud API is quite new and not very mature. Some tips:
 * API endpoints accept a language code but respond with Chinese text when when English is requested
 
 # Usage
-
-## Installation
-
-```
-pip install pysolarcloud
-```
 
 ## Register your app
 1. Create an account in the [iSolarCloud Developer Portal](https://developer-api.isolarcloud.com/)
@@ -92,14 +98,26 @@ The `Control` class enables retrieving and updating grid control settings. Param
 
 ```python
 from pysolarcloud.control import Control
+from pysolarcloud.plants import DeviceType
+
 devices = await plants_api.async_get_plant_devices(plant_id, device_types=[DeviceType.ENERGY_STORAGE_SYSTEM])
 device_uuid = devices[0]["uuid"]
 control_api = Control(auth)
 # Fetch current config
 current_settings = await control_api.async_read_parameters(device_uuid)
 print(current_settings)
-# Make an update
-await control_api.async_update_parameters(device_uuid, { "charge_discharge_command": "Charge" })
+# Make an update using the canonical command values
+await control_api.async_update_parameters(
+    device_uuid,
+    {
+        "charge_discharge_command": Control.CHARGE_DISCHARGE_COMMANDS["charge"],
+        "charge_discharge_power": "2500",
+    },
+)
+
+# When using External EMS mode, send a heartbeat periodically to keep the inverter in dispatch mode.
+# 10017 = external_ems_heartbeat, value is the heartbeat interval in seconds (1-1000).
+await control_api.async_heartbeat(device_uuid, interval_seconds=60)
 ```
 
 # Contributions
