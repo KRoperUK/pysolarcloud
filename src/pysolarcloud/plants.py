@@ -277,7 +277,7 @@ class Plants:
             ]
         }
         """
-        ps = str(plant_id) if isinstance(plant_id, list) else [plant_id]
+        ps = plant_id if isinstance(plant_id, list) else [plant_id]
         if measure_points is None:
             ms = list(self.measure_points.keys())
         else:

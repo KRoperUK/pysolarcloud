@@ -253,5 +253,35 @@ async def test_device_realtime_merges_extra_points(auth, plants):
     assert "83033" in body["point_id_list"]
 
 
+@pytest.mark.asyncio
+async def test_historical_data_list_plant_id_produces_list_ps_id_list(auth, plants):
+    """A list of plant IDs is passed through as a list ps_id_list, not its repr string."""
+    from datetime import datetime
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": []}}
+    )
+
+    await plants.async_get_historical_data(["123", "456"], datetime(2024, 1, 1, 0, 0, 0))
+
+    body = auth.request.call_args.args[1]
+    assert body["ps_id_list"] == ["123", "456"]
+
+
+@pytest.mark.asyncio
+async def test_historical_data_scalar_plant_id_is_wrapped_in_list(auth, plants):
+    """A scalar plant ID is wrapped in a single-element list ps_id_list."""
+    from datetime import datetime
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": []}}
+    )
+
+    await plants.async_get_historical_data("123", datetime(2024, 1, 1, 0, 0, 0))
+
+    body = auth.request.call_args.args[1]
+    assert body["ps_id_list"] == ["123"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
