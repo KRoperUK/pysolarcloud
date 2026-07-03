@@ -1,9 +1,11 @@
 name: Publish to PyPI
 
 on:
-  # Chained from release-please.yml when a release PR is merged.
-  workflow_call: {}
-  # Backup / manual path: pushing a v* tag directly also publishes.
+  # Manual / backup path. Automated releases publish from release-please.yml
+  # (PyPI Trusted Publishing can't be driven through a reusable workflow, so the
+  # build/publish steps are inlined there rather than reused from here).
+  # Pushing a v* tag directly, or running this workflow manually, also publishes.
+  workflow_dispatch: {}
   push:
     tags:
       - "v*"
