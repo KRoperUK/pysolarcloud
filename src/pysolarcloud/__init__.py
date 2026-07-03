@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from enum import StrEnum
 from urllib.parse import quote_plus
 
-from aiohttp import ClientResponse, ClientSession
+from aiohttp import ClientResponse, ClientSession, ClientTimeout
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -134,6 +134,9 @@ class AbstractAuth(ABC):
 class Auth(AbstractAuth):
     """Class to authenticate with the SolarCloud API."""
 
+    #: Default total timeout (seconds) applied to an internally-created session.
+    DEFAULT_TIMEOUT = 30
+
     def __init__(
         self,
         host: str,
@@ -143,11 +146,31 @@ class Auth(AbstractAuth):
         *,
         websession: ClientSession | None = None,
     ):
-        """Initialize the auth."""
+        """Initialize the auth.
+
+        If ``websession`` is not supplied, an owned ``ClientSession`` is created with a
+        request timeout and closed by :meth:`async_close` (or on ``async with`` exit). An
+        injected session is left untouched — the caller owns its lifecycle.
+        """
+        self._owns_session = websession is None
         if websession is None:
-            websession = ClientSession(raise_for_status=True)
+            websession = ClientSession(
+                raise_for_status=True,
+                timeout=ClientTimeout(total=self.DEFAULT_TIMEOUT),
+            )
         super().__init__(websession, host, appkey, access_key, app_id)
         self.tokens = None
+
+    async def async_close(self) -> None:
+        """Close the underlying session, but only if it was created internally."""
+        if self._owns_session and self.websession is not None and not self.websession.closed:
+            await self.websession.close()
+
+    async def __aenter__(self) -> "Auth":
+        return self
+
+    async def __aexit__(self, *exc_info) -> None:
+        await self.async_close()
 
     async def async_authorize(self, code, redirect_uri):
         """Authorize the user."""

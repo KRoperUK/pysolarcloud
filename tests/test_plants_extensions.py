@@ -283,5 +283,35 @@ async def test_historical_data_scalar_plant_id_is_wrapped_in_list(auth, plants):
     assert body["ps_id_list"] == ["123"]
 
 
+@pytest.mark.asyncio
+async def test_realtime_data_applies_raise_for_status(auth, plants):
+    """Realtime data raises for HTTP status uniformly, regardless of the session flag."""
+    resp = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {"point_dict": [], "device_point_list": []},
+        }
+    )
+    auth.request.return_value = resp
+
+    await plants.async_get_realtime_data("123")
+
+    resp.raise_for_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_historical_data_applies_raise_for_status(auth, plants):
+    """Historical data raises for HTTP status uniformly, regardless of the session flag."""
+    from datetime import datetime
+
+    resp = _mock_response({"result_code": "1", "result_msg": "success", "result_data": {"point_dict": []}})
+    auth.request.return_value = resp
+
+    await plants.async_get_historical_data("123", datetime(2024, 1, 1, 0, 0, 0))
+
+    resp.raise_for_status.assert_called_once()
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -77,3 +77,38 @@ async def test_no_tokens_raises_auth_not_initialised():
     with pytest.raises(PySolarCloudException) as exc:
         await auth.async_get_access_token()
     assert exc.value.error == "auth_not_initialised"
+
+
+@pytest.mark.asyncio
+async def test_async_close_closes_internally_created_session():
+    """An internally-created ClientSession is owned and closed by async_close()."""
+    auth = Auth(host="https://gateway.isolarcloud.eu", appkey="k", access_key="s", app_id="1")
+    assert auth.websession.closed is False
+    await auth.async_close()
+    assert auth.websession.closed is True
+
+
+@pytest.mark.asyncio
+async def test_async_close_leaves_injected_session_open():
+    """An injected session is not owned, so async_close() must not close it."""
+    session = MagicMock()
+    session.closed = False
+    session.close = AsyncMock()
+    auth = Auth(
+        host="https://gateway.isolarcloud.eu",
+        appkey="k",
+        access_key="s",
+        app_id="1",
+        websession=session,
+    )
+    await auth.async_close()
+    session.close.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_context_manager_closes_owned_session():
+    """Using Auth as an async context manager closes an owned session on exit."""
+    async with Auth(host="https://gateway.isolarcloud.eu", appkey="k", access_key="s", app_id="1") as auth:
+        session = auth.websession
+        assert session.closed is False
+    assert session.closed is True

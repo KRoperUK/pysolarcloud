@@ -169,6 +169,7 @@ class Plants:
         res = await self.auth.request(
             uri, {"ps_id_list": ps, "point_id_list": ms, "is_get_point_dict": "1"}, lang=self.lang
         )
+        res.raise_for_status()
         res = await res.json()
         if res.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, res)
@@ -296,6 +297,7 @@ class Plants:
             "minute_interval": str(interval.seconds // 60),
         }
         res = await self.auth.request(uri, params, lang=self.lang)
+        res.raise_for_status()
         res = await res.json()
         if res.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, res)
