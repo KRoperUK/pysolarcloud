@@ -112,7 +112,6 @@ class Auth(AbstractAuth):
     async def async_authorize(self, code, redirect_uri):
         """Authorize the user."""
         ts = await self.async_fetch_tokens(code, redirect_uri)
-        print(ts)
         if "access_token" not in ts:
             _LOGGER.error("Authorization failed: %s", str(ts))
             return
@@ -129,6 +128,12 @@ class Auth(AbstractAuth):
             raise PySolarCloudException({"error": "auth_not_initialised", "error_description": "You must authorize first."})
         if self.tokens["expires_at"] < int(time.time()):
             ts = await self.async_refresh_tokens(self.tokens["refresh_token"])
+            if "access_token" not in ts:
+                # The refresh token is no longer valid; the caller must re-authorize.
+                # Raise a typed error rather than letting `ts["access_token"]` surface
+                # a bare KeyError that callers would have to string-match.
+                _LOGGER.error("Token refresh failed: %s", str(ts))
+                raise TokenRefreshError(ts)
             self.tokens = {
                 "access_token": ts["access_token"],
                 "refresh_token": ts["refresh_token"],
@@ -149,3 +154,17 @@ class PySolarCloudException(Exception):
             self.error = err
             self.error_description = None
             self.req_serial_num = None
+
+
+class TokenRefreshError(PySolarCloudException):
+    """Raised when refreshing the access token fails (the response has no access token).
+
+    This means the stored refresh token is no longer valid and the user must
+    re-authorize. Catch this type (or its ``PySolarCloudException`` base) instead of
+    inspecting a bare ``KeyError``. The raw refresh response is available as
+    ``response`` for debugging.
+    """
+
+    def __init__(self, response: dict | None = None):
+        super().__init__({"error": "token_refresh_failed", "error_description": "Token refresh returned no access token"})
+        self.response = response
