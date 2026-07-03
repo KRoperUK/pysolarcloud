@@ -34,6 +34,8 @@ async def test_realtime_data_merges_extra_measure_points(auth, plants):
     """Extra measure points are requested without mutating the class dict."""
     auth.request.return_value = _mock_response(
         {
+            "result_code": "1",
+            "result_msg": "success",
             "result_data": {
                 "point_dict": [
                     {"point_id": "99999", "point_name": "Battery Charge", "point_unit": "W"},
@@ -41,7 +43,7 @@ async def test_realtime_data_merges_extra_measure_points(auth, plants):
                 "device_point_list": [
                     {"ps_id": "123", "p99999": "1500"},
                 ],
-            }
+            },
         }
     )
 
@@ -58,6 +60,8 @@ async def test_realtime_data_filter_by_measure_points(auth, plants):
     """Caller can request specific codes by name, including extra ones."""
     auth.request.return_value = _mock_response(
         {
+            "result_code": "1",
+            "result_msg": "success",
             "result_data": {
                 "point_dict": [
                     {"point_id": "83033", "point_name": "Power", "point_unit": "W"},
@@ -66,7 +70,7 @@ async def test_realtime_data_filter_by_measure_points(auth, plants):
                 "device_point_list": [
                     {"ps_id": "123", "p83033": "3000", "p99998": "2000"},
                 ],
-            }
+            },
         }
     )
 
@@ -85,6 +89,8 @@ async def test_device_realtime_returns_data(auth, plants):
     """Device realtime endpoint returns per-device data when available."""
     auth.request.return_value = _mock_response(
         {
+            "result_code": "1",
+            "result_msg": "success",
             "result_data": {
                 "point_dict": [
                     {"point_id": "11111", "point_name": "EV Power", "point_unit": "W"},
@@ -92,7 +98,7 @@ async def test_device_realtime_returns_data(auth, plants):
                 "device_point_list": [
                     {"uuid": "dev-1", "p11111": "7000"},
                 ],
-            }
+            },
         }
     )
 
@@ -105,7 +111,9 @@ async def test_device_realtime_returns_data(auth, plants):
 @pytest.mark.asyncio
 async def test_device_realtime_gracefully_degrades_on_404(auth, plants):
     """Device realtime endpoint returns {} when the upstream endpoint is absent."""
-    auth.request.return_value = _mock_response({"error": {"error": "not found"}}, status=404)
+    auth.request.return_value = _mock_response(
+        {"result_code": "E996", "result_msg": "api not found", "result_data": None}, status=404
+    )
 
     data = await plants.async_get_device_realtime("123", 7)
 
@@ -116,7 +124,7 @@ async def test_device_realtime_gracefully_degrades_on_404(auth, plants):
 async def test_device_realtime_swallows_known_api_errors(auth, plants):
     """Known soft errors from the device endpoint are treated as "unsupported"."""
     auth.request.return_value = _mock_response(
-        {"error": {"error": "endpoint_not_found", "error_description": "Unknown endpoint"}}
+        {"result_code": "E996", "result_msg": "api not found", "result_data": None}
     )
 
     data = await plants.async_get_device_realtime("123", DeviceType.METER)
@@ -129,7 +137,9 @@ async def test_device_realtime_raises_on_unexpected_error(auth, plants):
     """Unexpected errors still raise PySolarCloudException."""
     from pysolarcloud import PySolarCloudException
 
-    auth.request.return_value = _mock_response({"error": {"error": "internal_error", "error_description": "boom"}})
+    auth.request.return_value = _mock_response(
+        {"result_code": "E00003", "result_msg": "The token is invalid or has expired", "result_data": None}
+    )
 
     with pytest.raises(PySolarCloudException):
         await plants.async_get_device_realtime("123", DeviceType.METER)
@@ -140,10 +150,12 @@ async def test_device_realtime_accepts_int_device_type(auth, plants):
     """Numeric device type strings are accepted."""
     auth.request.return_value = _mock_response(
         {
+            "result_code": "1",
+            "result_msg": "success",
             "result_data": {
                 "point_dict": [],
                 "device_point_list": [],
-            }
+            },
         }
     )
 
@@ -160,10 +172,12 @@ async def test_measure_points_dict_unchanged_after_extra_call(auth, plants):
     original = dict(Plants.measure_points)
     auth.request.return_value = _mock_response(
         {
+            "result_code": "1",
+            "result_msg": "success",
             "result_data": {
                 "point_dict": [],
                 "device_point_list": [{"ps_id": "123"}],
-            }
+            },
         }
     )
 
@@ -174,13 +188,30 @@ async def test_measure_points_dict_unchanged_after_extra_call(auth, plants):
 
 @pytest.mark.asyncio
 async def test_realtime_data_error_raises(auth, plants):
-    """Error responses still raise."""
+    """Error responses (result_code != "1") still raise."""
     from pysolarcloud import PySolarCloudException
 
-    auth.request.return_value = _mock_response({"error": {"error": "auth"}})
+    auth.request.return_value = _mock_response(
+        {"result_code": "E00003", "result_msg": "The token is invalid or has expired", "result_data": None}
+    )
 
     with pytest.raises(PySolarCloudException):
         await plants.async_get_realtime_data("123")
+
+
+@pytest.mark.asyncio
+async def test_realtime_data_error_exposes_result_code_on_error_attr(auth, plants):
+    """A result_code != "1" response raises with .error == the result_code (not a KeyError)."""
+    from pysolarcloud import PySolarCloudException
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "E00003", "result_msg": "The token is invalid or has expired", "result_data": None}
+    )
+
+    with pytest.raises(PySolarCloudException) as exc:
+        await plants.async_get_realtime_data("123")
+    assert exc.value.error == "E00003"
+    assert exc.value.result_msg == "The token is invalid or has expired"
 
 
 @pytest.mark.asyncio
@@ -188,10 +219,12 @@ async def test_device_realtime_uses_default_measure_points(auth, plants):
     """Device realtime uses the canonical measure_points map by default."""
     auth.request.return_value = _mock_response(
         {
+            "result_code": "1",
+            "result_msg": "success",
             "result_data": {
                 "point_dict": [],
                 "device_point_list": [],
-            }
+            },
         }
     )
 
@@ -205,10 +238,12 @@ async def test_device_realtime_merges_extra_points(auth, plants):
     """Device realtime can request additional point IDs."""
     auth.request.return_value = _mock_response(
         {
+            "result_code": "1",
+            "result_msg": "success",
             "result_data": {
                 "point_dict": [],
                 "device_point_list": [],
-            }
+            },
         }
     )
 

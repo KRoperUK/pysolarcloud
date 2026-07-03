@@ -188,19 +188,46 @@ class Auth(AbstractAuth):
 
 
 class PySolarCloudException(Exception):
-    """Exception class raised by PySolarCloud when communication with the iSolarCloud service fails."""
+    """Exception class raised by PySolarCloud when communication with the iSolarCloud service fails.
+
+    It can be constructed either from a raw error string, from a legacy ``{"error": ...}``
+    envelope, or from a real iSolarCloud business response of the shape
+    ``{"result_code", "result_msg", "result_data", "req_serial_num"}``. In every case the
+    machine-readable code is exposed on ``.error`` (for the result_code shape this is the
+    ``result_code`` string, e.g. ``"E00003"``), which downstream consumers match against their
+    own ``AUTH_ERRORS`` sets.
+    """
 
     def __init__(self, err: dict | str):
         if isinstance(err, dict):
-            super().__init__(err["error"])
-            self.error = err["error"]
-            self.error_description = err.get("error_description")
+            # Prefer the legacy "error" key, fall back to the real API's "result_code".
+            code = err.get("error") or err.get("result_code")
+            self.error = code
+            self.result_msg = err.get("result_msg")
+            self.error_description = err.get("error_description") or self.result_msg
             self.req_serial_num = err.get("req_serial_num", None)
+            super().__init__(self.error_description or code or str(err))
         else:
             super().__init__(err)
             self.error = err
+            self.result_msg = None
             self.error_description = None
             self.req_serial_num = None
+
+
+class AuthError(PySolarCloudException):
+    """Raised when the iSolarCloud API rejects a request because the credentials are dead.
+
+    A thin typed marker for downstream consumers that would rather catch a type than match
+    ``.error`` against a set of result codes. ``.error`` still carries the raw code.
+    """
+
+
+class RateLimitError(PySolarCloudException):
+    """Raised when the iSolarCloud API rejects a request because the call rate limit was hit.
+
+    A thin typed marker; ``.error`` still carries the raw result code.
+    """
 
 
 class TokenRefreshError(PySolarCloudException):

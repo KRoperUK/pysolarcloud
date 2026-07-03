@@ -3,6 +3,12 @@ from enum import Enum
 
 from . import _LOGGER, AbstractAuth, PySolarCloudException
 
+# result_code values from the per-device realtime endpoint that mean "this endpoint / target is
+# not available for this account" rather than a genuine failure. When we see one of these (or an
+# HTTP 404/405) we degrade to an empty dict so callers can feature-detect gracefully.
+# E994 = "system not found", E996 = "api not found" (see Appendix 2: API Error Code Definitions).
+_DEVICE_ENDPOINT_MISSING_CODES = frozenset({"E994", "E996"})
+
 
 class DeviceType(Enum):
     """Enum for the device types used by async_get_plant_devices."""
@@ -70,7 +76,7 @@ class Plants:
         res = await self.auth.request(uri, {"page": 1, "size": 100})
         res.raise_for_status()
         data = await res.json()
-        if "error" in data:
+        if data.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, data)
             raise PySolarCloudException(data)
         plants = [plant for plant in data["result_data"]["pageList"]]
@@ -84,8 +90,8 @@ class Plants:
         res = await self.auth.request(uri, {"ps_ids": ps})
         res.raise_for_status()
         data = await res.json()
-        if "error" in data:
-            _LOGGER.error("Error response from %s: %s", uri, res)
+        if data.get("result_code") != "1":
+            _LOGGER.error("Error response from %s: %s", uri, data)
             raise PySolarCloudException(data)
         plants = data["result_data"]["data_list"]
         _LOGGER.debug("async_get_plant_details: %s", plants)
@@ -104,7 +110,7 @@ class Plants:
         res = await self.auth.request(uri, params)
         res.raise_for_status()
         data = await res.json()
-        if "error" in data:
+        if data.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, data)
             raise PySolarCloudException(data)
         devices = data["result_data"]["pageList"]
@@ -164,7 +170,7 @@ class Plants:
             uri, {"ps_id_list": ps, "point_id_list": ms, "is_get_point_dict": "1"}, lang=self.lang
         )
         res = await res.json()
-        if "error" in res:
+        if res.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, res)
             raise PySolarCloudException(res)
         point_dict = dict([(str(point["point_id"]), point) for point in res["result_data"]["point_dict"]])
@@ -219,9 +225,8 @@ class Plants:
             _LOGGER.debug("Device realtime endpoint unavailable for plant %s type %s", plant_id, type_id)
             return {}
         res = await res.json()
-        if "error" in res:
-            error_code = res["error"].get("error") if isinstance(res["error"], dict) else None
-            if error_code in {"endpoint_not_found", "invalid_request"}:
+        if res.get("result_code") != "1":
+            if res.get("result_code") in _DEVICE_ENDPOINT_MISSING_CODES:
                 _LOGGER.debug("Device realtime endpoint rejected request: %s", res)
                 return {}
             _LOGGER.error("Error response from %s: %s", uri, res)
