@@ -1,5 +1,6 @@
 """Tests for typed token-refresh error handling (KRoperUK fork)."""
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -50,6 +51,40 @@ async def test_refresh_success_rotates_tokens():
     token = await auth.async_get_access_token()
 
     assert token == "new"
+    assert auth.tokens["refresh_token"] == "r2"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_expired_token_refreshes_exactly_once():
+    """Concurrent callers sharing one Auth spend the single-use refresh token only once.
+
+    The refresh token is rotated on first use, so a second concurrent refresh with the
+    same token fails upstream. An asyncio.Lock + expiry re-check must let only the first
+    waiter refresh; the rest return the freshly stored token.
+    """
+    auth = _auth()
+    auth.tokens = {"access_token": "old", "refresh_token": "r1", "expires_at": 0}  # expired
+
+    call_count = 0
+
+    async def fake_refresh(refresh_token, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        # Yield control so an unsynchronized second caller would interleave into the
+        # refresh block and double-spend the refresh token.
+        await asyncio.sleep(0)
+        return {"access_token": "new", "refresh_token": "r2", "expires_in": 3600}
+
+    auth.async_refresh_tokens = AsyncMock(side_effect=fake_refresh)
+
+    tokens = await asyncio.gather(
+        auth.async_get_access_token(),
+        auth.async_get_access_token(),
+    )
+
+    assert tokens == ["new", "new"]
+    assert call_count == 1
+    auth.async_refresh_tokens.assert_awaited_once()
     assert auth.tokens["refresh_token"] == "r2"
 
 

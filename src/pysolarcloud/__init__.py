@@ -1,5 +1,6 @@
 """A Python library to interact with Sungrow's iSolarCloud API."""
 
+import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -160,6 +161,10 @@ class Auth(AbstractAuth):
             )
         super().__init__(websession, host, appkey, access_key, app_id)
         self.tokens = None
+        # Serializes token refresh so concurrent callers can't both spend the
+        # single-use refresh token. Created lazily inside the running loop to
+        # avoid binding the lock to the wrong event loop.
+        self._refresh_lock: asyncio.Lock | None = None
 
     async def async_close(self) -> None:
         """Close the underlying session, but only if it was created internally."""
@@ -194,20 +199,30 @@ class Auth(AbstractAuth):
                     "error_description": "You must authorize first.",
                 }
             )
-        if self.tokens["expires_at"] < int(time.time()):
-            ts = await self.async_refresh_tokens(self.tokens["refresh_token"])
-            if "access_token" not in ts:
-                # The refresh token is no longer valid; the caller must re-authorize.
-                # Raise a typed error rather than letting `ts["access_token"]` surface
-                # a bare KeyError that callers would have to string-match.
-                _LOGGER.error("Token refresh failed: %s", str(ts))
-                raise TokenRefreshError(ts)
-            self.tokens = {
-                "access_token": ts["access_token"],
-                "refresh_token": ts["refresh_token"],
-                "expires_at": int(time.time()) + ts["expires_in"] - 20,
-            }
-        return self.tokens["access_token"]
+        # Fast path: a still-valid token needs no refresh and no lock.
+        if self.tokens["expires_at"] >= int(time.time()):
+            return self.tokens["access_token"]
+        # Slow path: serialize refreshes. The refresh token is single-use — iSolarCloud
+        # rotates it on first use — so concurrent callers must not both spend it. The
+        # first waiter refreshes; the rest see the freshly stored token on the
+        # authoritative expiry re-check inside the lock and skip the refresh.
+        if self._refresh_lock is None:
+            self._refresh_lock = asyncio.Lock()
+        async with self._refresh_lock:
+            if self.tokens["expires_at"] < int(time.time()):
+                ts = await self.async_refresh_tokens(self.tokens["refresh_token"])
+                if "access_token" not in ts:
+                    # The refresh token is no longer valid; the caller must re-authorize.
+                    # Raise a typed error rather than letting `ts["access_token"]` surface
+                    # a bare KeyError that callers would have to string-match.
+                    _LOGGER.error("Token refresh failed: %s", str(ts))
+                    raise TokenRefreshError(ts)
+                self.tokens = {
+                    "access_token": ts["access_token"],
+                    "refresh_token": ts["refresh_token"],
+                    "expires_at": int(time.time()) + ts["expires_in"] - 20,
+                }
+            return self.tokens["access_token"]
 
 
 class PySolarCloudException(Exception):
