@@ -161,15 +161,20 @@ def test_auth_url_builds_region_specific_url():
 
 def test_auth_url_china_and_australia_regions():
     """Each server maps to its own auth host + cloudId."""
+    # Assert the full scheme+host prefix (not a bare substring) so China's
+    # web3.isolarcloud.com can't spuriously match International's ...com.hk.
     cn = Auth(host=Server.China, appkey="k", access_key="s", app_id="9", websession=MagicMock())
-    assert "auth" in cn.auth_url("https://cb") or "web3" in cn.auth_url("https://cb")
-    assert "cloudId=1" in cn.auth_url("https://cb")
+    cn_url = cn.auth_url("https://cb")
+    assert cn_url.startswith("https://web3.isolarcloud.com/#/authorized-app")
+    assert "cloudId=1" in cn_url
     au = Auth(host=Server.Australia, appkey="k", access_key="s", app_id="9", websession=MagicMock())
-    assert "auweb3.isolarcloud.com" in au.auth_url("https://cb")
-    assert "cloudId=7" in au.auth_url("https://cb")
+    au_url = au.auth_url("https://cb")
+    assert au_url.startswith("https://auweb3.isolarcloud.com/#/authorized-app")
+    assert "cloudId=7" in au_url
     intl = Auth(host=Server.International, appkey="k", access_key="s", app_id="9", websession=MagicMock())
-    assert "web3.isolarcloud.com.hk" in intl.auth_url("https://cb")
-    assert "cloudId=2" in intl.auth_url("https://cb")
+    intl_url = intl.auth_url("https://cb")
+    assert intl_url.startswith("https://web3.isolarcloud.com.hk/#/authorized-app")
+    assert "cloudId=2" in intl_url
 
 
 @pytest.mark.asyncio
