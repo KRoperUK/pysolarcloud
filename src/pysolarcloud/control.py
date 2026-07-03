@@ -5,6 +5,13 @@ from typing import Any
 
 from . import _LOGGER, AbstractAuth, PySolarCloudException
 
+# Server-side task lifetime (``expire_second``) used when submitting a param-setting
+# task. It doubles as the default client-side deadline for :meth:`Control.wait_for_task`
+# so we stop polling once the server would have expired the task anyway.
+_EXPIRE_SECONDS = 120
+# Seconds between polls while a task is still running.
+_POLL_INTERVAL = 5
+
 
 class Control:
     """Class to interact with the Grid Control API."""
@@ -12,11 +19,12 @@ class Control:
     def __init__(self, auth: AbstractAuth, *, lang: str = "_en_US"):
         """Initialize the control API."""
         self.auth = auth
+        self.lang = lang
 
     async def async_param_config_verification(self, device_uuid: str, set_type: int) -> bool:
         """Verifies whether the device supports parameter configuration."""
         uri = "/openapi/platform/paramSettingCheck"
-        res = await self.auth.request(uri, {"set_type": set_type, "uuid": str(device_uuid)})
+        res = await self.auth.request(uri, {"set_type": set_type, "uuid": str(device_uuid)}, lang=self.lang)
         res.raise_for_status()
         data = await res.json()
         _LOGGER.debug("async_param_config_verification: %s", data)
@@ -33,22 +41,31 @@ class Control:
         """Check if the device supports read operations."""
         return await self.async_param_config_verification(device_uuid, 0)
 
-    async def wait_for_task(self, device_uuid: str, task_id: str) -> dict:
-        """Poll for the task to be completed."""
+    async def wait_for_task(self, device_uuid: str, task_id: str, *, timeout: float = _EXPIRE_SECONDS) -> dict:
+        """Poll for the task to be completed.
+
+        Polls every ``_POLL_INTERVAL`` seconds while the task reports "running"
+        (``command_status == 2``). Gives up after ``timeout`` seconds (defaulting to
+        the same ``expire_second`` the task was submitted with) and raises
+        :class:`PySolarCloudException` so a stuck task cannot hang the caller forever.
+        """
         uri = "/openapi/platform/getParamSettingTask"
         params = {
             "task_id": str(task_id),
             "uuid": str(device_uuid),
         }
+        deadline = asyncio.get_running_loop().time() + timeout
         await asyncio.sleep(2)
         while True:
-            res = await self.auth.request(uri, params)
+            res = await self.auth.request(uri, params, lang=self.lang)
             res.raise_for_status()
             data = await res.json()
             _LOGGER.debug("wait_for_task: %s", data)
             if data.get("result_code") == "1" and data["result_data"]["command_status"] == 2:
                 # Task is still running
-                await asyncio.sleep(5)
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise PySolarCloudException(f"Timed out waiting for task {task_id} to complete after {timeout}s")
+                await asyncio.sleep(_POLL_INTERVAL)
                 continue
             elif data.get("result_code") == "1" and data["result_data"]["command_status"] == 8:
                 return data["result_data"]["param_list"]
@@ -72,10 +89,10 @@ class Control:
             "set_type": 2,
             "uuid": str(device_uuid),
             "task_name": f"Readback {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "expire_second": 120,
+            "expire_second": _EXPIRE_SECONDS,
             "param_list": plist,
         }
-        res = await self.auth.request(uri, params)
+        res = await self.auth.request(uri, params, lang=self.lang)
         res.raise_for_status()
         data = await res.json()
         _LOGGER.debug("async_read_parameters: %s", data)
@@ -99,10 +116,10 @@ class Control:
             "set_type": 0,
             "uuid": str(device_uuid),
             "task_name": f"Update {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "expire_second": 120,
+            "expire_second": _EXPIRE_SECONDS,
             "param_list": plist,
         }
-        res = await self.auth.request(uri, params)
+        res = await self.auth.request(uri, params, lang=self.lang)
         res.raise_for_status()
         data = await res.json()
         _LOGGER.debug("async_update_parameters: %s", data)
@@ -223,8 +240,12 @@ class Control:
         "10074": "forced_charging_end_time_2_hour",
         "10075": "forced_charging_end_time_2_minute",
         "10076": "forced_charging_target_soc_2",
-        "10091": "max_charging_power",
-        "10092": "max_discharging_power",
+        # 10091 max_charging_power / 10092 max_discharging_power are display×100 per Appendix 10,
+        # but their safe device limits are unknown, so encode_parameter would emit an unscaled,
+        # unbounded value. Left out until we can read the per-device limits (see #16,
+        # getDevPropertyPointValue) and add PARAMETER_SPECS with a correct scale/min/max.
+        # "10091": "max_charging_power",
+        # "10092": "max_discharging_power",
         # These are defined in API documentation but are rejected by the API as duplicates of 10071 and 10076
         # "10015": "forced_charging_target_soc1",
         # "10016": "forced_charging_target_soc2",
@@ -315,7 +336,8 @@ class Control:
         as ``str(value)`` unchanged.
 
         Raises:
-            ValueError: for an unknown enum option or a non-numeric numeric value.
+            ValueError: for an unknown enum option, a non-numeric numeric value, or a
+                numeric value outside the parameter's declared ``min``/``max`` bounds.
         """
         spec = cls.PARAMETER_SPECS.get(name)
         if spec is None:
@@ -329,9 +351,19 @@ class Control:
                 return str(value)
             raise ValueError(f"Unknown option {value!r} for {name}; expected one of {sorted(values)}")
         try:
-            return str(int(round(float(value) * spec.get("scale", 1))))  # type: ignore[arg-type]
+            numeric = float(value)  # type: ignore[arg-type]
         except (TypeError, ValueError) as err:
             raise ValueError(f"{name} expects a numeric value, got {value!r}") from err
+        # Enforce the declared display-unit bounds before scaling so an out-of-range
+        # value is never sent to hardware (#13). Bounds may be omitted or None (open-ended).
+        low = spec.get("min")
+        high = spec.get("max")
+        if (low is not None and numeric < low) or (high is not None and numeric > high):
+            unit = spec.get("unit", "")
+            low_str = "-inf" if low is None else f"{low}{unit}"
+            high_str = "inf" if high is None else f"{high}{unit}"
+            raise ValueError(f"{name} value {value!r} out of range [{low_str}, {high_str}]")
+        return str(int(round(numeric * spec.get("scale", 1))))
 
     async def async_set_parameter(self, device_uuid: str, name: str, value: object) -> list[dict[str, Any]]:
         """Encode ``value`` for ``name`` (see :meth:`encode_parameter`) and write it."""

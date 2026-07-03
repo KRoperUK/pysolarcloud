@@ -1,12 +1,13 @@
 """A Python library to interact with Sungrow's iSolarCloud API."""
 
+import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
 from enum import StrEnum
 from urllib.parse import quote_plus
 
-from aiohttp import ClientResponse, ClientSession
+from aiohttp import ClientResponse, ClientSession, ClientTimeout
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class AbstractAuth(ABC):
     async def async_get_access_token(self) -> str:
         """Return a valid access token."""
 
-    async def request(self, path, data, *, lang="_en_US", **kwargs) -> ClientResponse:
+    async def request(self, path: str, data: dict, *, lang: str = "_en_US", **kwargs) -> ClientResponse:
         """Make a request to iSolarCloud.
 
         Parameters:
@@ -91,7 +92,7 @@ class AbstractAuth(ABC):
             headers=headers,
         )
 
-    async def async_fetch_tokens(self, code, redirect_uri, **kwargs) -> ClientResponse:
+    async def async_fetch_tokens(self, code: str, redirect_uri: str, **kwargs) -> dict:
         """Fetch the access and refresh tokens."""
         if headers := kwargs.pop("headers", {}):
             headers = dict(headers)
@@ -115,7 +116,7 @@ class AbstractAuth(ABC):
         )
         return await response.json()
 
-    async def async_refresh_tokens(self, refresh_token, **kwargs) -> ClientResponse:
+    async def async_refresh_tokens(self, refresh_token: str, **kwargs) -> dict:
         """Refresh the access token."""
         if headers := kwargs.pop("headers", {}):
             headers = dict(headers)
@@ -134,6 +135,9 @@ class AbstractAuth(ABC):
 class Auth(AbstractAuth):
     """Class to authenticate with the SolarCloud API."""
 
+    #: Default total timeout (seconds) applied to an internally-created session.
+    DEFAULT_TIMEOUT = 30
+
     def __init__(
         self,
         host: str,
@@ -143,11 +147,35 @@ class Auth(AbstractAuth):
         *,
         websession: ClientSession | None = None,
     ):
-        """Initialize the auth."""
+        """Initialize the auth.
+
+        If ``websession`` is not supplied, an owned ``ClientSession`` is created with a
+        request timeout and closed by :meth:`async_close` (or on ``async with`` exit). An
+        injected session is left untouched — the caller owns its lifecycle.
+        """
+        self._owns_session = websession is None
         if websession is None:
-            websession = ClientSession(raise_for_status=True)
+            websession = ClientSession(
+                raise_for_status=True,
+                timeout=ClientTimeout(total=self.DEFAULT_TIMEOUT),
+            )
         super().__init__(websession, host, appkey, access_key, app_id)
         self.tokens = None
+        # Serializes token refresh so concurrent callers can't both spend the
+        # single-use refresh token. Created lazily inside the running loop to
+        # avoid binding the lock to the wrong event loop.
+        self._refresh_lock: asyncio.Lock | None = None
+
+    async def async_close(self) -> None:
+        """Close the underlying session, but only if it was created internally."""
+        if self._owns_session and self.websession is not None and not self.websession.closed:
+            await self.websession.close()
+
+    async def __aenter__(self) -> "Auth":
+        return self
+
+    async def __aexit__(self, *exc_info) -> None:
+        await self.async_close()
 
     async def async_authorize(self, code, redirect_uri):
         """Authorize the user."""
@@ -171,36 +199,73 @@ class Auth(AbstractAuth):
                     "error_description": "You must authorize first.",
                 }
             )
-        if self.tokens["expires_at"] < int(time.time()):
-            ts = await self.async_refresh_tokens(self.tokens["refresh_token"])
-            if "access_token" not in ts:
-                # The refresh token is no longer valid; the caller must re-authorize.
-                # Raise a typed error rather than letting `ts["access_token"]` surface
-                # a bare KeyError that callers would have to string-match.
-                _LOGGER.error("Token refresh failed: %s", str(ts))
-                raise TokenRefreshError(ts)
-            self.tokens = {
-                "access_token": ts["access_token"],
-                "refresh_token": ts["refresh_token"],
-                "expires_at": int(time.time()) + ts["expires_in"] - 20,
-            }
-        return self.tokens["access_token"]
+        # Fast path: a still-valid token needs no refresh and no lock.
+        if self.tokens["expires_at"] >= int(time.time()):
+            return self.tokens["access_token"]
+        # Slow path: serialize refreshes. The refresh token is single-use — iSolarCloud
+        # rotates it on first use — so concurrent callers must not both spend it. The
+        # first waiter refreshes; the rest see the freshly stored token on the
+        # authoritative expiry re-check inside the lock and skip the refresh.
+        if self._refresh_lock is None:
+            self._refresh_lock = asyncio.Lock()
+        async with self._refresh_lock:
+            if self.tokens["expires_at"] < int(time.time()):
+                ts = await self.async_refresh_tokens(self.tokens["refresh_token"])
+                if "access_token" not in ts:
+                    # The refresh token is no longer valid; the caller must re-authorize.
+                    # Raise a typed error rather than letting `ts["access_token"]` surface
+                    # a bare KeyError that callers would have to string-match.
+                    _LOGGER.error("Token refresh failed: %s", str(ts))
+                    raise TokenRefreshError(ts)
+                self.tokens = {
+                    "access_token": ts["access_token"],
+                    "refresh_token": ts["refresh_token"],
+                    "expires_at": int(time.time()) + ts["expires_in"] - 20,
+                }
+            return self.tokens["access_token"]
 
 
 class PySolarCloudException(Exception):
-    """Exception class raised by PySolarCloud when communication with the iSolarCloud service fails."""
+    """Exception class raised by PySolarCloud when communication with the iSolarCloud service fails.
+
+    It can be constructed either from a raw error string, from a legacy ``{"error": ...}``
+    envelope, or from a real iSolarCloud business response of the shape
+    ``{"result_code", "result_msg", "result_data", "req_serial_num"}``. In every case the
+    machine-readable code is exposed on ``.error`` (for the result_code shape this is the
+    ``result_code`` string, e.g. ``"E00003"``), which downstream consumers match against their
+    own ``AUTH_ERRORS`` sets.
+    """
 
     def __init__(self, err: dict | str):
         if isinstance(err, dict):
-            super().__init__(err["error"])
-            self.error = err["error"]
-            self.error_description = err.get("error_description")
+            # Prefer the legacy "error" key, fall back to the real API's "result_code".
+            code = err.get("error") or err.get("result_code")
+            self.error = code
+            self.result_msg = err.get("result_msg")
+            self.error_description = err.get("error_description") or self.result_msg
             self.req_serial_num = err.get("req_serial_num", None)
+            super().__init__(self.error_description or code or str(err))
         else:
             super().__init__(err)
             self.error = err
+            self.result_msg = None
             self.error_description = None
             self.req_serial_num = None
+
+
+class AuthError(PySolarCloudException):
+    """Raised when the iSolarCloud API rejects a request because the credentials are dead.
+
+    A thin typed marker for downstream consumers that would rather catch a type than match
+    ``.error`` against a set of result codes. ``.error`` still carries the raw code.
+    """
+
+
+class RateLimitError(PySolarCloudException):
+    """Raised when the iSolarCloud API rejects a request because the call rate limit was hit.
+
+    A thin typed marker; ``.error`` still carries the raw result code.
+    """
 
 
 class TokenRefreshError(PySolarCloudException):

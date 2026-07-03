@@ -3,6 +3,12 @@ from enum import Enum
 
 from . import _LOGGER, AbstractAuth, PySolarCloudException
 
+# result_code values from the per-device realtime endpoint that mean "this endpoint / target is
+# not available for this account" rather than a genuine failure. When we see one of these (or an
+# HTTP 404/405) we degrade to an empty dict so callers can feature-detect gracefully.
+# E994 = "system not found", E996 = "api not found" (see Appendix 2: API Error Code Definitions).
+_DEVICE_ENDPOINT_MISSING_CODES = frozenset({"E994", "E996"})
+
 
 class DeviceType(Enum):
     """Enum for the device types used by async_get_plant_devices."""
@@ -41,11 +47,19 @@ class DeviceType(Enum):
     CLEANING_DEVICE = 32
     DIRECT_CURRENT_CABINET = 33
     PUBLIC_MEASUREMENT_AND_CONTROL = 34
+    # 37 is documented as "PCS" in Appendix 1. It was originally added here as
+    # ENERGY_STORAGE_SYSTEM_2; that name is kept for backwards compatibility and PCS is
+    # provided below as an alias for the same member.
     ENERGY_STORAGE_SYSTEM_2 = 37
+    OPTIMIZER = 41
     BATTERY = 43
     BATTERY_CLUSTER_MANAGEMENT_UNIT = 44
     LOCAL_CONTROLLER = 45
+    CHARGER = 51
     BATTERY_SYSTEM_CONTROLLER = 52
+    MICROINVERTER = 55
+    DIESEL_GENERATOR = 63
+    PCS = 37  # alias of ENERGY_STORAGE_SYSTEM_2 (Appendix 1 name)
 
 
 class DeviceFaultStaus(Enum):
@@ -70,7 +84,7 @@ class Plants:
         res = await self.auth.request(uri, {"page": 1, "size": 100})
         res.raise_for_status()
         data = await res.json()
-        if "error" in data:
+        if data.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, data)
             raise PySolarCloudException(data)
         plants = [plant for plant in data["result_data"]["pageList"]]
@@ -84,8 +98,8 @@ class Plants:
         res = await self.auth.request(uri, {"ps_ids": ps})
         res.raise_for_status()
         data = await res.json()
-        if "error" in data:
-            _LOGGER.error("Error response from %s: %s", uri, res)
+        if data.get("result_code") != "1":
+            _LOGGER.error("Error response from %s: %s", uri, data)
             raise PySolarCloudException(data)
         plants = data["result_data"]["data_list"]
         _LOGGER.debug("async_get_plant_details: %s", plants)
@@ -104,7 +118,7 @@ class Plants:
         res = await self.auth.request(uri, params)
         res.raise_for_status()
         data = await res.json()
-        if "error" in data:
+        if data.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, data)
             raise PySolarCloudException(data)
         devices = data["result_data"]["pageList"]
@@ -121,7 +135,7 @@ class Plants:
         self,
         plant_id: str | list[str],
         *,
-        measure_points=None,
+        measure_points: list[str] | None = None,
         extra_measure_points: dict[str, str] | None = None,
     ) -> dict:
         """Return the latest realtime data from one or more plants.
@@ -163,8 +177,9 @@ class Plants:
         res = await self.auth.request(
             uri, {"ps_id_list": ps, "point_id_list": ms, "is_get_point_dict": "1"}, lang=self.lang
         )
+        res.raise_for_status()
         res = await res.json()
-        if "error" in res:
+        if res.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, res)
             raise PySolarCloudException(res)
         point_dict = dict([(str(point["point_id"]), point) for point in res["result_data"]["point_dict"]])
@@ -219,9 +234,8 @@ class Plants:
             _LOGGER.debug("Device realtime endpoint unavailable for plant %s type %s", plant_id, type_id)
             return {}
         res = await res.json()
-        if "error" in res:
-            error_code = res["error"].get("error") if isinstance(res["error"], dict) else None
-            if error_code in {"endpoint_not_found", "invalid_request"}:
+        if res.get("result_code") != "1":
+            if res.get("result_code") in _DEVICE_ENDPOINT_MISSING_CODES:
                 _LOGGER.debug("Device realtime endpoint rejected request: %s", res)
                 return {}
             _LOGGER.error("Error response from %s: %s", uri, res)
@@ -242,14 +256,92 @@ class Plants:
             out[uuid] = {d["code"]: d for d in data}
         return out
 
+    async def async_get_dev_property_point_value(
+        self, plant_id: str, device_type: DeviceType | int | str, point_ids: list[str]
+    ) -> dict:
+        """Return device property point values (e.g. per-device charge/discharge/feed-in limits).
+
+        Appendix 10 (Control Parameter Definitions) documents that the dispatch bounds for several
+        control parameters must be read back through ``getDevPropertyPointValue`` rather than being
+        static, for example:
+
+        * point ``18290`` — Max. Charging Power upper-limit range (bounds param_code ``10091``)
+        * point ``18291`` — Max. Discharging Power upper-limit range (bounds param_code ``10092``)
+        * point ``29046`` — Charging/Discharging Power upper limit in external dispatch mode
+          (bounds param_code ``10083``)
+
+        plant_id: str - The ID of the plant.
+        device_type: DeviceType | int | str - The device type to query (e.g. an Energy Storage
+            System). Normalised to its numeric string form.
+        point_ids: list[str] - The property point IDs to read.
+
+        Returns the raw ``result_data`` object from the API (shape is device/point dependent).
+
+        .. note::
+            The iSolarCloud docs reference this endpoint by name and by point ID but do not publish
+            a full request schema. The request field names (``ps_id``, ``device_type``,
+            ``point_id_list``) mirror the sibling ``getDeviceRealTimeData`` endpoint and are
+            **unverified against a live device**.
+        """
+        type_id = device_type.value if isinstance(device_type, DeviceType) else int(device_type)
+        uri = "/openapi/platform/getDevPropertyPointValue"
+        res = await self.auth.request(
+            uri,
+            {
+                "ps_id": str(plant_id),
+                "device_type": str(type_id),
+                "point_id_list": [str(p) for p in point_ids],
+            },
+            lang=self.lang,
+        )
+        res.raise_for_status()
+        res = await res.json()
+        if res.get("result_code") != "1":
+            _LOGGER.error("Error response from %s: %s", uri, res)
+            raise PySolarCloudException(res)
+        _LOGGER.debug("async_get_dev_property_point_value: %s", res.get("result_data"))
+        return res.get("result_data")
+
+    async def async_get_open_point_info(self, device_type: DeviceType | int | str | None = None) -> dict:
+        """Return the available open measuring-point definitions.
+
+        The common measuring-point pages (e.g. "Common Plant Measuring Points") note that additional
+        open measuring-point definitions can be discovered through the ``getOpenPointInfo`` endpoint.
+        This wrapper exposes that catalogue so callers can feature-detect point IDs beyond the
+        static :attr:`measure_points` map.
+
+        device_type: DeviceType | int | str | None - Optionally scope the definitions to a single
+            device type. When omitted, the device-type filter is not sent.
+
+        Returns the raw ``result_data`` object from the API (a list/map of point definitions).
+
+        .. note::
+            The docs reference this endpoint by name only and do not publish a full request schema.
+            The ``device_type`` request field mirrors the other device endpoints and is
+            **unverified against a live device**.
+        """
+        uri = "/openapi/platform/getOpenPointInfo"
+        params: dict = {}
+        if device_type is not None:
+            type_id = device_type.value if isinstance(device_type, DeviceType) else int(device_type)
+            params["device_type"] = str(type_id)
+        res = await self.auth.request(uri, params, lang=self.lang)
+        res.raise_for_status()
+        res = await res.json()
+        if res.get("result_code") != "1":
+            _LOGGER.error("Error response from %s: %s", uri, res)
+            raise PySolarCloudException(res)
+        _LOGGER.debug("async_get_open_point_info: %s", res.get("result_data"))
+        return res.get("result_data")
+
     async def async_get_historical_data(
         self,
         plant_id: str | list[str],
         start_time: datetime,
         end_time: datetime | None = None,
         *,
-        measure_points=None,
-        interval=timedelta(minutes=60),
+        measure_points: list[str] | None = None,
+        interval: timedelta = timedelta(minutes=60),
     ) -> dict:
         """Return historical data from one or more plants.
 
@@ -272,7 +364,7 @@ class Plants:
             ]
         }
         """
-        ps = str(plant_id) if isinstance(plant_id, list) else [plant_id]
+        ps = plant_id if isinstance(plant_id, list) else [plant_id]
         if measure_points is None:
             ms = list(self.measure_points.keys())
         else:
@@ -291,6 +383,7 @@ class Plants:
             "minute_interval": str(interval.seconds // 60),
         }
         res = await self.auth.request(uri, params, lang=self.lang)
+        res.raise_for_status()
         res = await res.json()
         if res.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, res)
@@ -377,7 +470,7 @@ class Plants:
         "83234": "total_field_maximum_dischargeable_power",  # W
         "83235": "total_field_chargeable_energy",  # Wh
         "83236": "total_field_dischargeable_energy",  # Wh
-        "83237": "total_field_energy_storage_maximum_reactive_power",  # W
+        "83237": "total_field_energy_storage_maximum_reactive_power",  # var
         "83238": "total_field_energy_storage_active_power",  # W
         "83239": "total_field_reactive_power",  # var
         "83240": "total_field_power_factor",  #
@@ -406,4 +499,5 @@ class Plants:
         "83332": "total_pv_yield",  # Wh
         "83334": "energy_storage_soc_ems",  #
         "83335": "energy_storage_remaining_charge_ems",  # Wh
+        "83743": "daily_yield_loss_load_shedding",  # Wh (daily yield loss due to load shedding)
     }
