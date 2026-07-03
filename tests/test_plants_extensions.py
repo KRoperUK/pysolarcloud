@@ -313,5 +313,25 @@ async def test_historical_data_applies_raise_for_status(auth, plants):
     resp.raise_for_status.assert_called_once()
 
 
+def test_device_type_new_members_exist():
+    """The DeviceType enum exposes the members documented in Appendix 1."""
+    assert DeviceType.CHARGER.value == 51
+    assert DeviceType.OPTIMIZER.value == 41
+    assert DeviceType.MICROINVERTER.value == 55
+    assert DeviceType.DIESEL_GENERATOR.value == 63
+    # Value round-trips
+    assert DeviceType(51).name == "CHARGER"
+    assert DeviceType(51) is DeviceType.CHARGER
+
+
+def test_device_type_37_alias_and_backwards_compat():
+    """37 keeps its existing name while also being reachable as the documented PCS alias."""
+    # The historical name must keep working.
+    assert DeviceType.ENERGY_STORAGE_SYSTEM_2.value == 37
+    assert DeviceType(37) is DeviceType.ENERGY_STORAGE_SYSTEM_2
+    # PCS is an alias for the same member (per Appendix 1).
+    assert DeviceType.PCS is DeviceType.ENERGY_STORAGE_SYSTEM_2
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

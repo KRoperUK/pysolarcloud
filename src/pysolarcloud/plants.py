@@ -47,11 +47,19 @@ class DeviceType(Enum):
     CLEANING_DEVICE = 32
     DIRECT_CURRENT_CABINET = 33
     PUBLIC_MEASUREMENT_AND_CONTROL = 34
+    # 37 is documented as "PCS" in Appendix 1. It was originally added here as
+    # ENERGY_STORAGE_SYSTEM_2; that name is kept for backwards compatibility and PCS is
+    # provided below as an alias for the same member.
     ENERGY_STORAGE_SYSTEM_2 = 37
+    OPTIMIZER = 41
     BATTERY = 43
     BATTERY_CLUSTER_MANAGEMENT_UNIT = 44
     LOCAL_CONTROLLER = 45
+    CHARGER = 51
     BATTERY_SYSTEM_CONTROLLER = 52
+    MICROINVERTER = 55
+    DIESEL_GENERATOR = 63
+    PCS = 37  # alias of ENERGY_STORAGE_SYSTEM_2 (Appendix 1 name)
 
 
 class DeviceFaultStaus(Enum):
