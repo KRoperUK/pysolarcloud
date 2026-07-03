@@ -1,8 +1,8 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
+# Package name, version and requires-python are declared in pyproject.toml ([project]);
+# setup.py only supplies the dynamic dependency fields.
 setup(
-    name="pysolarcloud",
-    version="0.1.0",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     install_requires=[
@@ -12,17 +12,7 @@ setup(
         "dev": [
             "pytest",
             "pytest-asyncio",
+            "pytest-cov",
         ],
     },
-    entry_points={
-        "console_scripts": [
-            # Add any command-line scripts here
-        ],
-    },
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
-    ],
-    python_requires=">=3.7",
 )

@@ -2,8 +2,10 @@
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from aiohttp import ClientResponse
+
 from pysolarcloud import PySolarCloudException
 from pysolarcloud.control import Control
 
@@ -32,13 +34,15 @@ def control(auth):
 @pytest.mark.asyncio
 async def test_async_heartbeat_sends_interval(auth, control):
     """async_heartbeat writes param 10017 with the supplied interval."""
-    auth.request.return_value = _mock_response({
-        "result_code": "1",
-        "result_data": {
-            "check_result": "1",
-            "dev_result_list": [{"code": "1", "task_id": "t-1"}],
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_data": {
+                "check_result": "1",
+                "dev_result_list": [{"code": "1", "task_id": "t-1"}],
+            },
         }
-    })
+    )
     with patch.object(control, "wait_for_task", new=AsyncMock(return_value=[])):
         await control.async_heartbeat("dev-1", 120)
 
@@ -59,13 +63,15 @@ async def test_async_heartbeat_rejects_invalid_interval(auth, control):
 @pytest.mark.asyncio
 async def test_heartbeat_loop_sends_then_stops(auth, control):
     """heartbeat_loop keeps sending until the stop event is set."""
-    auth.request.return_value = _mock_response({
-        "result_code": "1",
-        "result_data": {
-            "check_result": "1",
-            "dev_result_list": [{"code": "1", "task_id": "t-1"}],
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_data": {
+                "check_result": "1",
+                "dev_result_list": [{"code": "1", "task_id": "t-1"}],
+            },
         }
-    })
+    )
     with patch.object(control, "wait_for_task", new=AsyncMock(return_value=[])):
         stop = asyncio.Event()
         task = asyncio.create_task(control.heartbeat_loop("dev-1", 1, stop))
@@ -107,13 +113,15 @@ def test_forced_charging_value_mapping():
 @pytest.mark.asyncio
 async def test_async_update_parameters_uses_value_map(auth, control):
     """async_update_parameters accepts canonical names from the Control helpers."""
-    auth.request.return_value = _mock_response({
-        "result_code": "1",
-        "result_data": {
-            "check_result": "1",
-            "dev_result_list": [{"code": "1", "task_id": "t-1"}],
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_data": {
+                "check_result": "1",
+                "dev_result_list": [{"code": "1", "task_id": "t-1"}],
+            },
         }
-    })
+    )
     with patch.object(control, "wait_for_task", new=AsyncMock(return_value=[])):
         await control.async_update_parameters(
             "dev-1",
