@@ -1,6 +1,9 @@
 name: Publish to PyPI
 
 on:
+  # Chained from release-please.yml when a release PR is merged.
+  workflow_call: {}
+  # Backup / manual path: pushing a v* tag directly also publishes.
   push:
     tags:
       - "v*"
