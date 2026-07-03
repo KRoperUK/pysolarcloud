@@ -36,6 +36,12 @@ jobs:
       - name: Check formatting
         run: ruff format --check src/ tests/
 
+      - name: Install mypy
+        run: pip install mypy
+
+      - name: Type check with mypy
+        run: mypy
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15

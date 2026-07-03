@@ -5,6 +5,8 @@ from setuptools import find_packages, setup
 setup(
     packages=find_packages(where="src"),
     package_dir={"": "src"},
+    # Ship the py.typed marker (PEP 561) so consumers get the inline type hints.
+    package_data={"pysolarcloud": ["py.typed"]},
     install_requires=[
         "aiohttp",
     ],
@@ -13,6 +15,7 @@ setup(
             "pytest",
             "pytest-asyncio",
             "pytest-cov",
+            "mypy",
         ],
     },
 )

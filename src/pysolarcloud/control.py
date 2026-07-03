@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 from datetime import datetime
+from typing import Any
 
 from . import _LOGGER, AbstractAuth, PySolarCloudException
 
@@ -55,11 +56,13 @@ class Control:
                 _LOGGER.error("Task not successful %s: %s", task_id, data)
                 raise PySolarCloudException(f"Task not succesful {task_id}: {data}")
 
-    async def async_read_parameters(self, device_uuid: str, param_list: list[str] | None = None) -> dict:
+    async def async_read_parameters(
+        self, device_uuid: str, param_list: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Read the parameters from the device."""
         uri = "/openapi/platform/paramSetting"
         if param_list is None:
-            ps = self.config_parameters.keys()
+            ps: list[str] = list(self.config_parameters.keys())
         else:
             param_map = {v: k for k, v in self.config_parameters.items()}
             ps = [param_map.get(p, p) for p in param_list]
@@ -86,7 +89,7 @@ class Control:
             return [self._format_param_readout(param, param["return_value"]) for param in results]
         raise PySolarCloudException(f"Could not read parameters from device {device_uuid}: {data}")
 
-    async def async_update_parameters(self, device_uuid: str, param_values: dict) -> dict:
+    async def async_update_parameters(self, device_uuid: str, param_values: dict[str, Any]) -> list[dict[str, Any]]:
         """Update parameters to the device."""
         uri = "/openapi/platform/paramSetting"
         param_codes = {v: k for k, v in self.config_parameters.items()}
@@ -145,7 +148,7 @@ class Control:
                 continue
             return
 
-    def _format_param_readout(self, param: str, value: str) -> dict:
+    def _format_param_readout(self, param: dict[str, Any], value: str) -> dict[str, Any]:
         """Format the parameter response."""
         readout = {
             "id": param["param_code"],
@@ -153,7 +156,7 @@ class Control:
             "name": param["point_name"],
             "value": value,
             "unit": param.get("unit", ""),
-            "precision": param.get("set_precision", None),
+            "precision": param.get("set_precision"),
         }
         if param.get("set_val_name"):
             value_set_names = param["set_val_name"].split("|")
@@ -237,3 +240,99 @@ class Control:
         # "10088": "feed_in_limitation_on_off_in_external_dispatch_mode",
         # "10089": "feed_in_limitation_value_in_external_dispatch_mode",
     }
+
+    # Value encodings for the settable control parameters, from Appendix 10 (Control
+    # Parameter Definitions) of the iSolarCloud OpenAPI documentation. ``async_update_parameters``
+    # sends values verbatim, so a caller must send the *raw* value the device expects.
+    # These specs capture how a human-friendly value maps to that raw value:
+    #   - ``scale``: multiply the display value (watts, percent, seconds) to get the raw
+    #     integer, e.g. SOC/ratios are tenths of a percent (700-1000 = 70-100%, scale 10),
+    #     power is in watts (scale 1);
+    #   - ``values``: for enum parameters, an option name -> raw code map.
+    # Use :meth:`encode_parameter` / :meth:`async_set_parameter` to apply them.
+    PARAMETER_SPECS: dict[str, dict] = {
+        "soc_upper_limit": {"code": "10001", "kind": "percent", "unit": "%", "scale": 10, "min": 70, "max": 100},
+        "soc_lower_limit": {"code": "10002", "kind": "percent", "unit": "%", "scale": 10, "min": 0, "max": 50},
+        "energy_management_mode": {
+            "code": "10003",
+            "kind": "enum",
+            "values": {"self_consumption": "0", "compulsory": "2", "external_dispatch": "3", "vpp": "4"},
+        },
+        "charge_discharge_command": {
+            "code": "10004",
+            "kind": "enum",
+            "values": {"charge": "170", "discharge": "187", "stop": "204"},
+        },
+        "charge_discharge_power": {"code": "10005", "kind": "power", "unit": "W", "scale": 1, "min": 0, "max": 5000},
+        "limited_power_switch": {"code": "10007", "kind": "enum", "values": {"enable": "170", "disable": "85"}},
+        "active_power_limit_ratio": {
+            "code": "10008",
+            "kind": "percent",
+            "unit": "%",
+            "scale": 10,
+            "min": 0,
+            "max": 100,
+        },
+        "feed_in_limitation": {"code": "10012", "kind": "enum", "values": {"enable": "170", "disable": "85"}},
+        "feed_in_limitation_value": {"code": "10013", "kind": "power", "unit": "W", "scale": 1, "min": 0, "max": None},
+        "feed_in_limitation_ratio": {
+            "code": "10014",
+            "kind": "percent",
+            "unit": "%",
+            "scale": 10,
+            "min": 0,
+            "max": 100,
+        },
+        "external_ems_heartbeat": {"code": "10017", "kind": "duration", "unit": "s", "scale": 1, "min": 1, "max": 1000},
+        "battery_first": {"code": "10024", "kind": "enum", "values": {"enable": "170", "disable": "85"}},
+        "forced_charging": {"code": "10065", "kind": "enum", "values": {"enable": "170", "disable": "85"}},
+        "forced_charging_target_soc_1": {
+            "code": "10071",
+            "kind": "percent",
+            "unit": "%",
+            "scale": 1,
+            "min": 0,
+            "max": 100,
+        },
+        "forced_charging_target_soc_2": {
+            "code": "10076",
+            "kind": "percent",
+            "unit": "%",
+            "scale": 1,
+            "min": 0,
+            "max": 100,
+        },
+    }
+
+    @classmethod
+    def encode_parameter(cls, name: str, value: object) -> str:
+        """Encode a human-friendly value into the raw string the API expects.
+
+        For enum parameters ``value`` is an option name (e.g. ``"charge"``) or an
+        already-raw code. For numeric parameters ``value`` is in the parameter's
+        display unit (watts, percent, seconds) and is scaled to the integer the API
+        expects (see :attr:`PARAMETER_SPECS`). Parameters without a spec are returned
+        as ``str(value)`` unchanged.
+
+        Raises:
+            ValueError: for an unknown enum option or a non-numeric numeric value.
+        """
+        spec = cls.PARAMETER_SPECS.get(name)
+        if spec is None:
+            return str(value)
+        if spec["kind"] == "enum":
+            values: dict[str, str] = spec["values"]
+            key = str(value).lower()
+            if key in values:
+                return values[key]
+            if str(value) in values.values():
+                return str(value)
+            raise ValueError(f"Unknown option {value!r} for {name}; expected one of {sorted(values)}")
+        try:
+            return str(int(round(float(value) * spec.get("scale", 1))))  # type: ignore[arg-type]
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"{name} expects a numeric value, got {value!r}") from err
+
+    async def async_set_parameter(self, device_uuid: str, name: str, value: object) -> list[dict[str, Any]]:
+        """Encode ``value`` for ``name`` (see :meth:`encode_parameter`) and write it."""
+        return await self.async_update_parameters(device_uuid, {name: self.encode_parameter(name, value)})
