@@ -22,7 +22,11 @@ def _auth() -> Auth:
 async def test_refresh_failure_raises_token_refresh_error():
     """A refresh response without an access token raises TokenRefreshError, not KeyError."""
     auth = _auth()
-    auth.tokens = {"access_token": "old", "refresh_token": "r", "expires_at": 0}  # expired
+    auth.tokens = {
+        "access_token": "old",
+        "refresh_token": "r",
+        "expires_at": 0,
+    }  # expired
     auth.async_refresh_tokens = AsyncMock(return_value={"error": "invalid_grant"})
 
     with pytest.raises(TokenRefreshError) as exc:
@@ -53,7 +57,11 @@ async def test_refresh_success_rotates_tokens():
 async def test_valid_token_is_not_refreshed():
     """A still-valid token is returned without a refresh call."""
     auth = _auth()
-    auth.tokens = {"access_token": "tok", "refresh_token": "r", "expires_at": int(time.time()) + 9999}
+    auth.tokens = {
+        "access_token": "tok",
+        "refresh_token": "r",
+        "expires_at": int(time.time()) + 9999,
+    }
     auth.async_refresh_tokens = AsyncMock()
 
     assert await auth.async_get_access_token() == "tok"
