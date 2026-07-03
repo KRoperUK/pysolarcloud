@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiohttp import ClientResponse
 
-from pysolarcloud.plants import DeviceType, Plants
+from pysolarcloud.plants import DeviceFaultStaus, DeviceType, Plants
 
 
 def _mock_response(json_data: dict, *, status: int = 200) -> ClientResponse:
@@ -412,6 +412,254 @@ async def test_get_open_point_info_raises_on_error(auth, plants):
 
     with pytest.raises(PySolarCloudException):
         await plants.async_get_open_point_info(device_type=DeviceType.INVERTER)
+
+
+@pytest.mark.asyncio
+async def test_get_plants_returns_page_list(auth, plants):
+    """async_get_plants posts to queryPowerStationList and returns result_data.pageList."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {"pageList": [{"ps_id": "123", "ps_name": "Home"}], "rowCount": 1},
+        }
+    )
+
+    result = await plants.async_get_plants()
+
+    uri = auth.request.call_args.args[0]
+    body = auth.request.call_args.args[1]
+    assert uri == "/openapi/platform/queryPowerStationList"
+    assert body == {"page": 1, "size": 100}
+    assert result == [{"ps_id": "123", "ps_name": "Home"}]
+
+
+@pytest.mark.asyncio
+async def test_get_plants_raises_on_error(auth, plants):
+    """A result_code != "1" raises PySolarCloudException with .error == the code."""
+    from pysolarcloud import PySolarCloudException
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "E00003", "result_msg": "The token is invalid or has expired", "result_data": None}
+    )
+
+    with pytest.raises(PySolarCloudException) as exc:
+        await plants.async_get_plants()
+    assert exc.value.error == "E00003"
+    assert exc.value.result_msg == "The token is invalid or has expired"
+
+
+@pytest.mark.asyncio
+async def test_get_plant_details_scalar_id_returns_data_list(auth, plants):
+    """A scalar plant id is sent verbatim and result_data.data_list is returned."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"data_list": [{"ps_id": "123"}]}}
+    )
+
+    result = await plants.async_get_plant_details("123")
+
+    uri = auth.request.call_args.args[0]
+    body = auth.request.call_args.args[1]
+    assert uri == "/openapi/platform/getPowerStationDetail"
+    assert body["ps_ids"] == "123"
+    assert result == [{"ps_id": "123"}]
+
+
+@pytest.mark.asyncio
+async def test_get_plant_details_list_ids_are_comma_joined(auth, plants):
+    """A list of plant ids is comma-joined into ps_ids."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"data_list": []}}
+    )
+
+    await plants.async_get_plant_details(["123", "456"])
+
+    body = auth.request.call_args.args[1]
+    assert body["ps_ids"] == "123,456"
+
+
+@pytest.mark.asyncio
+async def test_get_plant_details_raises_on_error(auth, plants):
+    """A result_code != "1" raises PySolarCloudException with .error == the code."""
+    from pysolarcloud import PySolarCloudException
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "009", "result_msg": "rate limited", "result_data": None}
+    )
+
+    with pytest.raises(PySolarCloudException) as exc:
+        await plants.async_get_plant_details("123")
+    assert exc.value.error == "009"
+
+
+@pytest.mark.asyncio
+async def test_get_plant_devices_converts_type_and_fault_status_to_enums(auth, plants):
+    """Known device_type / dev_fault_status codes are converted to their enums."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {
+                "pageList": [
+                    {"device_name": "Inv1", "device_type": 1, "dev_fault_status": 4},
+                ]
+            },
+        }
+    )
+
+    devices = await plants.async_get_plant_devices("123")
+
+    uri = auth.request.call_args.args[0]
+    body = auth.request.call_args.args[1]
+    assert uri == "/openapi/platform/getDeviceListByPsId"
+    assert body["ps_id"] == "123"
+    assert "device_type_list" not in body
+    assert devices[0]["device_type"] is DeviceType.INVERTER
+    assert devices[0]["dev_fault_status"] is DeviceFaultStaus.NORMAL
+
+
+@pytest.mark.asyncio
+async def test_get_plant_devices_forwards_device_type_filter(auth, plants):
+    """device_types are normalised to their numeric string form in device_type_list."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"pageList": []}}
+    )
+
+    await plants.async_get_plant_devices("123", device_types=[DeviceType.INVERTER, 7])
+
+    body = auth.request.call_args.args[1]
+    assert body["device_type_list"] == ["1", "7"]
+
+
+@pytest.mark.asyncio
+async def test_get_plant_devices_leaves_unknown_codes_untouched(auth, plants):
+    """Device/fault codes outside the enums pass through unchanged (no crash)."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {"pageList": [{"device_type": 999, "dev_fault_status": 0}]},
+        }
+    )
+
+    devices = await plants.async_get_plant_devices("123")
+    assert devices[0]["device_type"] == 999
+    assert devices[0]["dev_fault_status"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_plant_devices_raises_on_error(auth, plants):
+    """A result_code != "1" raises PySolarCloudException with .error == the code."""
+    from pysolarcloud import PySolarCloudException
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "E00003", "result_msg": "The token is invalid or has expired", "result_data": None}
+    )
+
+    with pytest.raises(PySolarCloudException) as exc:
+        await plants.async_get_plant_devices("123")
+    assert exc.value.error == "E00003"
+
+
+@pytest.mark.asyncio
+async def test_realtime_data_keeps_non_numeric_values_as_strings(auth, plants):
+    """A non-numeric point value is preserved verbatim rather than raising."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {
+                "point_dict": [{"point_id": "83033", "point_name": "Power", "point_unit": "W"}],
+                "device_point_list": [{"ps_id": "123", "p83033": "N/A"}],
+            },
+        }
+    )
+
+    data = await plants.async_get_realtime_data("123")
+    assert data["123"]["power"]["value"] == "N/A"
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_skips_devices_without_uuid(auth, plants):
+    """A device entry lacking uuid/device_id is skipped rather than keyed under ""."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {
+                "point_dict": [{"point_id": "83033", "point_name": "Power", "point_unit": "W"}],
+                "device_point_list": [
+                    {"p83033": "1000"},  # no uuid -> skipped
+                    {"uuid": "dev-9", "p83033": "2000"},
+                ],
+            },
+        }
+    )
+
+    data = await plants.async_get_device_realtime("123", DeviceType.METER)
+    assert set(data.keys()) == {"dev-9"}
+    assert data["dev-9"]["power"]["value"] == 2000.0
+
+
+@pytest.mark.asyncio
+async def test_historical_data_named_measure_points_are_mapped(auth, plants):
+    """Named measure points are translated to their numeric point IDs in the points CSV."""
+    from datetime import datetime
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": []}}
+    )
+
+    await plants.async_get_historical_data("123", datetime(2024, 1, 1, 0, 0, 0), measure_points=["power", "83024"])
+
+    body = auth.request.call_args.args[1]
+    # "power" -> 83033, "83024" left as-is; both prefixed with "p" in the points CSV.
+    assert body["points"] == "p83033,p83024"
+
+
+@pytest.mark.asyncio
+async def test_historical_data_parses_time_series(auth, plants):
+    """Historical series frames are parsed into per-plant lists with timestamps."""
+    from datetime import datetime
+
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {
+                "point_dict": [{"point_id": "83033", "point_name": "Power", "point_unit": "W"}],
+                "123": [
+                    {"time_stamp": "20240101000000", "p83033": "1000"},
+                    {"time_stamp": "20240101010000", "p83033": "1500"},
+                ],
+            },
+        }
+    )
+
+    data = await plants.async_get_historical_data("123", datetime(2024, 1, 1, 0, 0, 0))
+
+    series = data["123"]
+    assert series[0]["code"] == "power"
+    assert series[0]["value"] == 1000.0
+    assert series[0]["unit"] == "W"
+    assert series[0]["timestamp"] == datetime(2024, 1, 1, 0, 0, 0)
+    assert series[1]["value"] == 1500.0
+
+
+@pytest.mark.asyncio
+async def test_historical_data_raises_on_error(auth, plants):
+    """A result_code != "1" raises PySolarCloudException with .error == the code."""
+    from datetime import datetime
+
+    from pysolarcloud import PySolarCloudException
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "E00003", "result_msg": "The token is invalid or has expired", "result_data": None}
+    )
+
+    with pytest.raises(PySolarCloudException) as exc:
+        await plants.async_get_historical_data("123", datetime(2024, 1, 1, 0, 0, 0))
+    assert exc.value.error == "E00003"
 
 
 def test_measure_points_contains_load_shedding_loss():
