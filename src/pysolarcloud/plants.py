@@ -72,7 +72,7 @@ class Plants:
         data = await res.json()
         if "error" in data:
             _LOGGER.error("Error response from %s: %s", uri, data)
-            raise PySolarCloudException(res)
+            raise PySolarCloudException(data)
         plants = [plant for plant in data["result_data"]["pageList"]]
         _LOGGER.debug("async_get_plants: %s", plants)
         return plants
@@ -86,13 +86,13 @@ class Plants:
         data = await res.json()
         if "error" in data:
             _LOGGER.error("Error response from %s: %s", uri, res)
-            raise PySolarCloudException(res)
+            raise PySolarCloudException(data)
         plants = data["result_data"]["data_list"]
         _LOGGER.debug("async_get_plant_details: %s", plants)
         return plants
 
     async def async_get_plant_devices(
-        self, plant_id: str, *, device_types: list[DeviceType | int] = None
+        self, plant_id: str, *, device_types: list[DeviceType | int] | None = None
     ) -> list[dict]:
         """Return details about the devices for a plant."""
         if device_types is None:
@@ -106,7 +106,7 @@ class Plants:
         data = await res.json()
         if "error" in data:
             _LOGGER.error("Error response from %s: %s", uri, data)
-            raise PySolarCloudException(res)
+            raise PySolarCloudException(data)
         devices = data["result_data"]["pageList"]
         for device in devices:
             # Convert the device type and fault status to enums
@@ -246,7 +246,7 @@ class Plants:
         self,
         plant_id: str | list[str],
         start_time: datetime,
-        end_time: datetime = None,
+        end_time: datetime | None = None,
         *,
         measure_points=None,
         interval=timedelta(minutes=60),
@@ -318,6 +318,7 @@ class Plants:
     def _format_measure_point(
         self, point_id: str, point_value: str, point_dict: dict, measure_points: dict | None = None
     ) -> dict:
+        v: float | str | None
         try:
             v = float(point_value) if point_value is not None else None
         except ValueError:

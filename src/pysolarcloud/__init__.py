@@ -141,7 +141,7 @@ class Auth(AbstractAuth):
         access_key: str,
         app_id: str,
         *,
-        websession: ClientSession = None,
+        websession: ClientSession | None = None,
     ):
         """Initialize the auth."""
         if websession is None:
