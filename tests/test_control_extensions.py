@@ -96,6 +96,22 @@ async def test_heartbeat_loop_survives_api_errors(auth, control):
     assert auth.request.call_count >= 1
 
 
+@pytest.mark.asyncio
+async def test_wait_for_task_times_out_when_stuck_running(auth, control):
+    """A task stuck in the running state raises instead of looping forever (#12)."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_data": {"command_status": 2},  # always "running"
+        }
+    )
+    with (
+        patch("pysolarcloud.control.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(PySolarCloudException, match="[Tt]imed out"),
+    ):
+        await control.wait_for_task("dev-1", "t-1", timeout=0)
+
+
 def test_charge_discharge_command_value_mapping():
     """The canonical command names map to the expected on-the-wire values."""
     assert Control.CHARGE_DISCHARGE_COMMANDS == {

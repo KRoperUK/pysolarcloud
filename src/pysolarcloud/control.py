@@ -5,6 +5,13 @@ from typing import Any
 
 from . import _LOGGER, AbstractAuth, PySolarCloudException
 
+# Server-side task lifetime (``expire_second``) used when submitting a param-setting
+# task. It doubles as the default client-side deadline for :meth:`Control.wait_for_task`
+# so we stop polling once the server would have expired the task anyway.
+_EXPIRE_SECONDS = 120
+# Seconds between polls while a task is still running.
+_POLL_INTERVAL = 5
+
 
 class Control:
     """Class to interact with the Grid Control API."""
@@ -33,13 +40,20 @@ class Control:
         """Check if the device supports read operations."""
         return await self.async_param_config_verification(device_uuid, 0)
 
-    async def wait_for_task(self, device_uuid: str, task_id: str) -> dict:
-        """Poll for the task to be completed."""
+    async def wait_for_task(self, device_uuid: str, task_id: str, *, timeout: float = _EXPIRE_SECONDS) -> dict:
+        """Poll for the task to be completed.
+
+        Polls every ``_POLL_INTERVAL`` seconds while the task reports "running"
+        (``command_status == 2``). Gives up after ``timeout`` seconds (defaulting to
+        the same ``expire_second`` the task was submitted with) and raises
+        :class:`PySolarCloudException` so a stuck task cannot hang the caller forever.
+        """
         uri = "/openapi/platform/getParamSettingTask"
         params = {
             "task_id": str(task_id),
             "uuid": str(device_uuid),
         }
+        deadline = asyncio.get_running_loop().time() + timeout
         await asyncio.sleep(2)
         while True:
             res = await self.auth.request(uri, params)
@@ -48,7 +62,9 @@ class Control:
             _LOGGER.debug("wait_for_task: %s", data)
             if data.get("result_code") == "1" and data["result_data"]["command_status"] == 2:
                 # Task is still running
-                await asyncio.sleep(5)
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise PySolarCloudException(f"Timed out waiting for task {task_id} to complete after {timeout}s")
+                await asyncio.sleep(_POLL_INTERVAL)
                 continue
             elif data.get("result_code") == "1" and data["result_data"]["command_status"] == 8:
                 return data["result_data"]["param_list"]
@@ -72,7 +88,7 @@ class Control:
             "set_type": 2,
             "uuid": str(device_uuid),
             "task_name": f"Readback {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "expire_second": 120,
+            "expire_second": _EXPIRE_SECONDS,
             "param_list": plist,
         }
         res = await self.auth.request(uri, params)
@@ -99,7 +115,7 @@ class Control:
             "set_type": 0,
             "uuid": str(device_uuid),
             "task_name": f"Update {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "expire_second": 120,
+            "expire_second": _EXPIRE_SECONDS,
             "param_list": plist,
         }
         res = await self.auth.request(uri, params)
