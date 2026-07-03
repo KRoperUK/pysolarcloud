@@ -392,7 +392,7 @@ class Plants:
         "83234": "total_field_maximum_dischargeable_power",  # W
         "83235": "total_field_chargeable_energy",  # Wh
         "83236": "total_field_dischargeable_energy",  # Wh
-        "83237": "total_field_energy_storage_maximum_reactive_power",  # W
+        "83237": "total_field_energy_storage_maximum_reactive_power",  # var
         "83238": "total_field_energy_storage_active_power",  # W
         "83239": "total_field_reactive_power",  # var
         "83240": "total_field_power_factor",  #
@@ -421,4 +421,5 @@ class Plants:
         "83332": "total_pv_yield",  # Wh
         "83334": "energy_storage_soc_ems",  #
         "83335": "energy_storage_remaining_charge_ems",  # Wh
+        "83743": "daily_yield_loss_load_shedding",  # Wh (daily yield loss due to load shedding)
     }

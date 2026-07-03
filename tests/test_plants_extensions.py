@@ -313,6 +313,11 @@ async def test_historical_data_applies_raise_for_status(auth, plants):
     resp.raise_for_status.assert_called_once()
 
 
+def test_measure_points_contains_load_shedding_loss():
+    """Plant point 83743 (daily yield loss due to load shedding) is catalogued."""
+    assert Plants.measure_points["83743"] == "daily_yield_loss_load_shedding"
+
+
 def test_device_type_new_members_exist():
     """The DeviceType enum exposes the members documented in Appendix 1."""
     assert DeviceType.CHARGER.value == 51
