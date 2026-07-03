@@ -239,8 +239,12 @@ class Control:
         "10074": "forced_charging_end_time_2_hour",
         "10075": "forced_charging_end_time_2_minute",
         "10076": "forced_charging_target_soc_2",
-        "10091": "max_charging_power",
-        "10092": "max_discharging_power",
+        # 10091 max_charging_power / 10092 max_discharging_power are display×100 per Appendix 10,
+        # but their safe device limits are unknown, so encode_parameter would emit an unscaled,
+        # unbounded value. Left out until we can read the per-device limits (see #16,
+        # getDevPropertyPointValue) and add PARAMETER_SPECS with a correct scale/min/max.
+        # "10091": "max_charging_power",
+        # "10092": "max_discharging_power",
         # These are defined in API documentation but are rejected by the API as duplicates of 10071 and 10076
         # "10015": "forced_charging_target_soc1",
         # "10016": "forced_charging_target_soc2",
@@ -331,7 +335,8 @@ class Control:
         as ``str(value)`` unchanged.
 
         Raises:
-            ValueError: for an unknown enum option or a non-numeric numeric value.
+            ValueError: for an unknown enum option, a non-numeric numeric value, or a
+                numeric value outside the parameter's declared ``min``/``max`` bounds.
         """
         spec = cls.PARAMETER_SPECS.get(name)
         if spec is None:
@@ -345,9 +350,19 @@ class Control:
                 return str(value)
             raise ValueError(f"Unknown option {value!r} for {name}; expected one of {sorted(values)}")
         try:
-            return str(int(round(float(value) * spec.get("scale", 1))))  # type: ignore[arg-type]
+            numeric = float(value)  # type: ignore[arg-type]
         except (TypeError, ValueError) as err:
             raise ValueError(f"{name} expects a numeric value, got {value!r}") from err
+        # Enforce the declared display-unit bounds before scaling so an out-of-range
+        # value is never sent to hardware (#13). Bounds may be omitted or None (open-ended).
+        low = spec.get("min")
+        high = spec.get("max")
+        if (low is not None and numeric < low) or (high is not None and numeric > high):
+            unit = spec.get("unit", "")
+            low_str = "-inf" if low is None else f"{low}{unit}"
+            high_str = "inf" if high is None else f"{high}{unit}"
+            raise ValueError(f"{name} value {value!r} out of range [{low_str}, {high_str}]")
+        return str(int(round(numeric * spec.get("scale", 1))))
 
     async def async_set_parameter(self, device_uuid: str, name: str, value: object) -> list[dict[str, Any]]:
         """Encode ``value`` for ``name`` (see :meth:`encode_parameter`) and write it."""

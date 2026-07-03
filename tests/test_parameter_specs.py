@@ -52,6 +52,44 @@ def test_unknown_parameter_passthrough():
     assert Control.encode_parameter("not_a_real_param", 42) == "42"
 
 
+def test_out_of_range_value_raises():
+    # soc_upper_limit min is 70% -> 50% must be rejected before it reaches hardware (#13).
+    with pytest.raises(ValueError, match="soc_upper_limit"):
+        Control.encode_parameter("soc_upper_limit", 50)
+    # soc_lower_limit max is 50%.
+    with pytest.raises(ValueError, match="soc_lower_limit"):
+        Control.encode_parameter("soc_lower_limit", 60)
+    # charge_discharge_power range is 0..5000 W.
+    with pytest.raises(ValueError, match="charge_discharge_power"):
+        Control.encode_parameter("charge_discharge_power", -100)
+    with pytest.raises(ValueError, match="charge_discharge_power"):
+        Control.encode_parameter("charge_discharge_power", 6000)
+
+
+def test_in_range_boundary_values_encode():
+    # Boundaries are inclusive and still encode with the usual scaling.
+    assert Control.encode_parameter("soc_upper_limit", 70) == "700"
+    assert Control.encode_parameter("soc_upper_limit", 100) == "1000"
+    assert Control.encode_parameter("charge_discharge_power", 0) == "0"
+    assert Control.encode_parameter("charge_discharge_power", 5000) == "5000"
+
+
+def test_open_upper_bound_allows_large_value():
+    # feed_in_limitation_value has min 0 but no upper bound (max None) -> large value OK.
+    assert Control.encode_parameter("feed_in_limitation_value", 100000) == "100000"
+    with pytest.raises(ValueError, match="feed_in_limitation_value"):
+        Control.encode_parameter("feed_in_limitation_value", -1)
+
+
+def test_max_charge_discharge_power_not_silently_unscaled():
+    # 10091/10092 had no PARAMETER_SPECS, so encode_parameter emitted the display value
+    # unscaled. They are removed from config_parameters until real device limits are known (#13/#16).
+    assert "max_charging_power" not in Control.config_parameters.values()
+    assert "max_discharging_power" not in Control.config_parameters.values()
+    assert "10091" not in Control.config_parameters
+    assert "10092" not in Control.config_parameters
+
+
 async def test_async_set_parameter_encodes_then_writes():
     control = Control(MagicMock())
     control.async_update_parameters = AsyncMock(return_value=[])
