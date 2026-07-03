@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.8.0...v0.9.0) (2026-07-03)
+
+
+### Features
+
+* raise typed AuthError/RateLimitError from API errors ([c9e6d31](https://github.com/KRoperUK/pysolarcloud/commit/c9e6d31c5382495b3d79b7d5200a0c0517d0b8fe))
+* raise typed AuthError/RateLimitError from API errors ([583ab13](https://github.com/KRoperUK/pysolarcloud/commit/583ab135219b8a3d91d3ba14ebf127c2e37ec3f6)), closes [#23](https://github.com/KRoperUK/pysolarcloud/issues/23)
+
 ## [0.8.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.7.0...v0.8.0) (2026-07-03)
 
 
