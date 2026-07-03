@@ -64,7 +64,7 @@ class AbstractAuth(ABC):
     async def async_get_access_token(self) -> str:
         """Return a valid access token."""
 
-    async def request(self, path, data, *, lang="_en_US", **kwargs) -> ClientResponse:
+    async def request(self, path: str, data: dict, *, lang: str = "_en_US", **kwargs) -> ClientResponse:
         """Make a request to iSolarCloud.
 
         Parameters:
@@ -92,7 +92,7 @@ class AbstractAuth(ABC):
             headers=headers,
         )
 
-    async def async_fetch_tokens(self, code, redirect_uri, **kwargs) -> ClientResponse:
+    async def async_fetch_tokens(self, code: str, redirect_uri: str, **kwargs) -> dict:
         """Fetch the access and refresh tokens."""
         if headers := kwargs.pop("headers", {}):
             headers = dict(headers)
@@ -116,7 +116,7 @@ class AbstractAuth(ABC):
         )
         return await response.json()
 
-    async def async_refresh_tokens(self, refresh_token, **kwargs) -> ClientResponse:
+    async def async_refresh_tokens(self, refresh_token: str, **kwargs) -> dict:
         """Refresh the access token."""
         if headers := kwargs.pop("headers", {}):
             headers = dict(headers)

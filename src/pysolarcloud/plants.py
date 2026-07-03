@@ -135,7 +135,7 @@ class Plants:
         self,
         plant_id: str | list[str],
         *,
-        measure_points=None,
+        measure_points: list[str] | None = None,
         extra_measure_points: dict[str, str] | None = None,
     ) -> dict:
         """Return the latest realtime data from one or more plants.
@@ -340,8 +340,8 @@ class Plants:
         start_time: datetime,
         end_time: datetime | None = None,
         *,
-        measure_points=None,
-        interval=timedelta(minutes=60),
+        measure_points: list[str] | None = None,
+        interval: timedelta = timedelta(minutes=60),
     ) -> dict:
         """Return historical data from one or more plants.
 

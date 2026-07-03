@@ -127,6 +127,25 @@ def test_forced_charging_value_mapping():
 
 
 @pytest.mark.asyncio
+async def test_control_forwards_non_default_lang_to_request(auth):
+    """A non-default lang given to Control is forwarded to auth.request (#15)."""
+    control = Control(auth, lang="_de_DE")
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_data": {
+                "check_result": "1",
+                "dev_result_list": [{"code": "1", "task_id": "t-1"}],
+            },
+        }
+    )
+    with patch.object(control, "wait_for_task", new=AsyncMock(return_value=[])):
+        await control.async_update_parameters("dev-1", {"charge_discharge_power": "2500"})
+
+    assert auth.request.call_args.kwargs["lang"] == "_de_DE"
+
+
+@pytest.mark.asyncio
 async def test_async_update_parameters_uses_value_map(auth, control):
     """async_update_parameters accepts canonical names from the Control helpers."""
     auth.request.return_value = _mock_response(

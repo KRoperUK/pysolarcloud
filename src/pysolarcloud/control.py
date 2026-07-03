@@ -19,11 +19,12 @@ class Control:
     def __init__(self, auth: AbstractAuth, *, lang: str = "_en_US"):
         """Initialize the control API."""
         self.auth = auth
+        self.lang = lang
 
     async def async_param_config_verification(self, device_uuid: str, set_type: int) -> bool:
         """Verifies whether the device supports parameter configuration."""
         uri = "/openapi/platform/paramSettingCheck"
-        res = await self.auth.request(uri, {"set_type": set_type, "uuid": str(device_uuid)})
+        res = await self.auth.request(uri, {"set_type": set_type, "uuid": str(device_uuid)}, lang=self.lang)
         res.raise_for_status()
         data = await res.json()
         _LOGGER.debug("async_param_config_verification: %s", data)
@@ -56,7 +57,7 @@ class Control:
         deadline = asyncio.get_running_loop().time() + timeout
         await asyncio.sleep(2)
         while True:
-            res = await self.auth.request(uri, params)
+            res = await self.auth.request(uri, params, lang=self.lang)
             res.raise_for_status()
             data = await res.json()
             _LOGGER.debug("wait_for_task: %s", data)
@@ -91,7 +92,7 @@ class Control:
             "expire_second": _EXPIRE_SECONDS,
             "param_list": plist,
         }
-        res = await self.auth.request(uri, params)
+        res = await self.auth.request(uri, params, lang=self.lang)
         res.raise_for_status()
         data = await res.json()
         _LOGGER.debug("async_read_parameters: %s", data)
@@ -118,7 +119,7 @@ class Control:
             "expire_second": _EXPIRE_SECONDS,
             "param_list": plist,
         }
-        res = await self.auth.request(uri, params)
+        res = await self.auth.request(uri, params, lang=self.lang)
         res.raise_for_status()
         data = await res.json()
         _LOGGER.debug("async_update_parameters: %s", data)
