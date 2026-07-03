@@ -225,6 +225,16 @@ class Auth(AbstractAuth):
             return self.tokens["access_token"]
 
 
+# Documented ``result_code`` values that mean the credentials / authorization are dead and
+# the caller must re-authenticate (Appendix 2: API Error Code Definitions / Appendix 9).
+# These map to :class:`AuthError`.
+_AUTH_ERROR_CODES = frozenset({"E00003", "E900", "E919", "E912", "E914"})
+# Documented quota / throttle ``result_code`` values (Appendix 2 / Appendix 9). These are
+# transient — the caller should back off and retry rather than re-authenticate — so they map
+# to :class:`RateLimitError`, NOT :class:`AuthError`.
+_RATE_LIMIT_CODES = frozenset({"E998", "E999"})
+
+
 class PySolarCloudException(Exception):
     """Exception class raised by PySolarCloud when communication with the iSolarCloud service fails.
 
@@ -234,6 +244,10 @@ class PySolarCloudException(Exception):
     machine-readable code is exposed on ``.error`` (for the result_code shape this is the
     ``result_code`` string, e.g. ``"E00003"``), which downstream consumers match against their
     own ``AUTH_ERRORS`` sets.
+
+    Prefer :meth:`from_response` at raise time: it returns the most specific subclass
+    (:class:`AuthError` / :class:`RateLimitError`) for documented result codes so consumers can
+    branch reauth-vs-retry by ``isinstance`` instead of maintaining a code list.
     """
 
     def __init__(self, err: dict | str):
@@ -251,6 +265,28 @@ class PySolarCloudException(Exception):
             self.result_msg = None
             self.error_description = None
             self.req_serial_num = None
+
+    @classmethod
+    def from_response(cls, err: dict | str) -> "PySolarCloudException":
+        """Return the most specific exception subclass for an iSolarCloud error response.
+
+        Documented ``result_code`` values are mapped to typed subclasses (see
+        ``_AUTH_ERROR_CODES`` / ``_RATE_LIMIT_CODES``); everything else falls back to the base
+        ``PySolarCloudException``. This is the single chokepoint the business methods raise
+        through, so ``isinstance(exc, AuthError)`` / ``isinstance(exc, RateLimitError)`` reliably
+        classify the failure while ``.error`` still carries the raw code for backward compat.
+
+        A factory is used rather than mutating ``self.__class__`` in ``__init__`` because an
+        instance cannot change its own class after construction.
+        """
+        # Match the code the same way __init__ derives ``.error`` so classification and the
+        # exposed attribute never disagree.
+        code = (err.get("error") or err.get("result_code")) if isinstance(err, dict) else err
+        if code in _AUTH_ERROR_CODES:
+            return AuthError(err)
+        if code in _RATE_LIMIT_CODES:
+            return RateLimitError(err)
+        return cls(err)
 
 
 class AuthError(PySolarCloudException):

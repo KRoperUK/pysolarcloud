@@ -86,7 +86,7 @@ class Plants:
         data = await res.json()
         if data.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, data)
-            raise PySolarCloudException(data)
+            raise PySolarCloudException.from_response(data)
         plants = [plant for plant in data["result_data"]["pageList"]]
         _LOGGER.debug("async_get_plants: %s", plants)
         return plants
@@ -100,7 +100,7 @@ class Plants:
         data = await res.json()
         if data.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, data)
-            raise PySolarCloudException(data)
+            raise PySolarCloudException.from_response(data)
         plants = data["result_data"]["data_list"]
         _LOGGER.debug("async_get_plant_details: %s", plants)
         return plants
@@ -120,7 +120,7 @@ class Plants:
         data = await res.json()
         if data.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, data)
-            raise PySolarCloudException(data)
+            raise PySolarCloudException.from_response(data)
         devices = data["result_data"]["pageList"]
         for device in devices:
             # Convert the device type and fault status to enums
@@ -181,7 +181,7 @@ class Plants:
         res = await res.json()
         if res.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, res)
-            raise PySolarCloudException(res)
+            raise PySolarCloudException.from_response(res)
         point_dict = dict([(str(point["point_id"]), point) for point in res["result_data"]["point_dict"]])
         plants = {}
         for plant in res["result_data"]["device_point_list"]:
@@ -239,7 +239,7 @@ class Plants:
                 _LOGGER.debug("Device realtime endpoint rejected request: %s", res)
                 return {}
             _LOGGER.error("Error response from %s: %s", uri, res)
-            raise PySolarCloudException(res)
+            raise PySolarCloudException.from_response(res)
         point_dict_items = res.get("result_data", {}).get("point_dict", []) or []
         point_dict = {str(p["point_id"]): p for p in point_dict_items}
         device_lists = res.get("result_data", {}).get("device_point_list", []) or []
@@ -298,7 +298,7 @@ class Plants:
         res = await res.json()
         if res.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, res)
-            raise PySolarCloudException(res)
+            raise PySolarCloudException.from_response(res)
         _LOGGER.debug("async_get_dev_property_point_value: %s", res.get("result_data"))
         return res.get("result_data")
 
@@ -330,7 +330,7 @@ class Plants:
         res = await res.json()
         if res.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, res)
-            raise PySolarCloudException(res)
+            raise PySolarCloudException.from_response(res)
         _LOGGER.debug("async_get_open_point_info: %s", res.get("result_data"))
         return res.get("result_data")
 
@@ -387,7 +387,7 @@ class Plants:
         res = await res.json()
         if res.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, res)
-            raise PySolarCloudException(res)
+            raise PySolarCloudException.from_response(res)
         point_dict = dict([(str(point["point_id"]), point) for point in res["result_data"]["point_dict"]])
         plants = {}
         for plant_id, plant in res["result_data"].items():
