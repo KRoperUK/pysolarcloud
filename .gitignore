@@ -21,3 +21,9 @@ venv/
 
 # pyenv
 .python-version
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml

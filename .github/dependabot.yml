@@ -1,0 +1,35 @@
+version: 2
+updates:
+  # GitHub Actions — keeps the SHA-pinned workflow actions up to date (Dependabot
+  # bumps both the hash and the version comment). Batched into one weekly PR.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Python dependencies (aiohttp + the dev/test extras).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      python:
+        patterns:
+          - "*"

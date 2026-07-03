@@ -7,9 +7,14 @@ authors = [
 ]
 description = "A library to interact with Sungrow's iSolarCloud API (KRoperUK fork with battery, EV charger and dispatch extensions)"
 readme = "README.md"
-requires-python = ">=3.7"
+# The code uses StrEnum (3.11+) and structural pattern matching, so 3.11 is the
+# real floor (the previous ">=3.7" was incorrect).
+requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
     "Framework :: AsyncIO",
     "Topic :: Home Automation",
@@ -27,3 +32,31 @@ build-backend = "setuptools.build_meta"
 [project.urls]
 Homepage = "https://github.com/KRoperUK/pysolarcloud"
 Issues = "https://github.com/KRoperUK/pysolarcloud/issues"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v"
+
+[tool.coverage.run]
+source = ["src/pysolarcloud"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true

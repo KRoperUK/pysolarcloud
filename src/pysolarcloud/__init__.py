@@ -1,9 +1,9 @@
 """A Python library to interact with Sungrow's iSolarCloud API."""
 
-from abc import ABC, abstractmethod
-from enum import StrEnum
 import logging
 import time
+from abc import ABC, abstractmethod
+from enum import StrEnum
 from urllib.parse import quote_plus
 
 from aiohttp import ClientResponse, ClientSession
