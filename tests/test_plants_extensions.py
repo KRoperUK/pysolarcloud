@@ -313,6 +313,107 @@ async def test_historical_data_applies_raise_for_status(auth, plants):
     resp.raise_for_status.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_get_dev_property_point_value_posts_expected_params(auth, plants):
+    """getDevPropertyPointValue hits the right URI with ps/device/point params and returns result_data."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {"18290": {"point_id": "18290", "value": "1060"}},
+        }
+    )
+
+    data = await plants.async_get_dev_property_point_value("123", DeviceType.ENERGY_STORAGE_SYSTEM, ["18290", "18291"])
+
+    uri = auth.request.call_args.args[0]
+    body = auth.request.call_args.args[1]
+    assert uri == "/openapi/platform/getDevPropertyPointValue"
+    assert body["ps_id"] == "123"
+    assert body["device_type"] == str(DeviceType.ENERGY_STORAGE_SYSTEM.value)
+    assert body["point_id_list"] == ["18290", "18291"]
+    assert data == {"18290": {"point_id": "18290", "value": "1060"}}
+
+
+@pytest.mark.asyncio
+async def test_get_dev_property_point_value_accepts_int_device_type(auth, plants):
+    """Numeric / string device types are normalised to the numeric string form."""
+    auth.request.return_value = _mock_response({"result_code": "1", "result_msg": "success", "result_data": {}})
+
+    await plants.async_get_dev_property_point_value("123", "14", ["29046"])
+    body = auth.request.call_args.args[1]
+    assert body["device_type"] == "14"
+    assert body["point_id_list"] == ["29046"]
+
+
+@pytest.mark.asyncio
+async def test_get_dev_property_point_value_raises_on_error(auth, plants):
+    """A result_code != "1" raises PySolarCloudException."""
+    from pysolarcloud import PySolarCloudException
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "E00003", "result_msg": "The token is invalid or has expired", "result_data": None}
+    )
+
+    with pytest.raises(PySolarCloudException):
+        await plants.async_get_dev_property_point_value("123", DeviceType.ENERGY_STORAGE_SYSTEM, ["18290"])
+
+
+@pytest.mark.asyncio
+async def test_get_dev_property_point_value_applies_raise_for_status(auth, plants):
+    """The wrapper enforces HTTP status via raise_for_status."""
+    resp = _mock_response({"result_code": "1", "result_msg": "success", "result_data": {}})
+    auth.request.return_value = resp
+
+    await plants.async_get_dev_property_point_value("123", DeviceType.ENERGY_STORAGE_SYSTEM, ["18290"])
+    resp.raise_for_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_open_point_info_posts_expected_params(auth, plants):
+    """getOpenPointInfo hits the right URI, forwards the device type and returns result_data."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {"point_list": [{"point_id": "83022", "point_name": "Daily Yield"}]},
+        }
+    )
+
+    data = await plants.async_get_open_point_info(device_type=DeviceType.INVERTER)
+
+    uri = auth.request.call_args.args[0]
+    body = auth.request.call_args.args[1]
+    assert uri == "/openapi/platform/getOpenPointInfo"
+    assert body["device_type"] == str(DeviceType.INVERTER.value)
+    assert data == {"point_list": [{"point_id": "83022", "point_name": "Daily Yield"}]}
+
+
+@pytest.mark.asyncio
+async def test_get_open_point_info_omits_device_type_when_absent(auth, plants):
+    """When no device type is supplied the request body omits it."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_list": []}}
+    )
+
+    await plants.async_get_open_point_info()
+    body = auth.request.call_args.args[1]
+    assert "device_type" not in body
+
+
+@pytest.mark.asyncio
+async def test_get_open_point_info_raises_on_error(auth, plants):
+    """A result_code != "1" raises PySolarCloudException."""
+    from pysolarcloud import PySolarCloudException
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "E00003", "result_msg": "The token is invalid or has expired", "result_data": None}
+    )
+
+    with pytest.raises(PySolarCloudException):
+        await plants.async_get_open_point_info(device_type=DeviceType.INVERTER)
+
+
 def test_measure_points_contains_load_shedding_loss():
     """Plant point 83743 (daily yield loss due to load shedding) is catalogued."""
     assert Plants.measure_points["83743"] == "daily_yield_loss_load_shedding"

@@ -256,6 +256,84 @@ class Plants:
             out[uuid] = {d["code"]: d for d in data}
         return out
 
+    async def async_get_dev_property_point_value(
+        self, plant_id: str, device_type: DeviceType | int | str, point_ids: list[str]
+    ) -> dict:
+        """Return device property point values (e.g. per-device charge/discharge/feed-in limits).
+
+        Appendix 10 (Control Parameter Definitions) documents that the dispatch bounds for several
+        control parameters must be read back through ``getDevPropertyPointValue`` rather than being
+        static, for example:
+
+        * point ``18290`` — Max. Charging Power upper-limit range (bounds param_code ``10091``)
+        * point ``18291`` — Max. Discharging Power upper-limit range (bounds param_code ``10092``)
+        * point ``29046`` — Charging/Discharging Power upper limit in external dispatch mode
+          (bounds param_code ``10083``)
+
+        plant_id: str - The ID of the plant.
+        device_type: DeviceType | int | str - The device type to query (e.g. an Energy Storage
+            System). Normalised to its numeric string form.
+        point_ids: list[str] - The property point IDs to read.
+
+        Returns the raw ``result_data`` object from the API (shape is device/point dependent).
+
+        .. note::
+            The iSolarCloud docs reference this endpoint by name and by point ID but do not publish
+            a full request schema. The request field names (``ps_id``, ``device_type``,
+            ``point_id_list``) mirror the sibling ``getDeviceRealTimeData`` endpoint and are
+            **unverified against a live device**.
+        """
+        type_id = device_type.value if isinstance(device_type, DeviceType) else int(device_type)
+        uri = "/openapi/platform/getDevPropertyPointValue"
+        res = await self.auth.request(
+            uri,
+            {
+                "ps_id": str(plant_id),
+                "device_type": str(type_id),
+                "point_id_list": [str(p) for p in point_ids],
+            },
+            lang=self.lang,
+        )
+        res.raise_for_status()
+        res = await res.json()
+        if res.get("result_code") != "1":
+            _LOGGER.error("Error response from %s: %s", uri, res)
+            raise PySolarCloudException(res)
+        _LOGGER.debug("async_get_dev_property_point_value: %s", res.get("result_data"))
+        return res.get("result_data")
+
+    async def async_get_open_point_info(self, device_type: DeviceType | int | str | None = None) -> dict:
+        """Return the available open measuring-point definitions.
+
+        The common measuring-point pages (e.g. "Common Plant Measuring Points") note that additional
+        open measuring-point definitions can be discovered through the ``getOpenPointInfo`` endpoint.
+        This wrapper exposes that catalogue so callers can feature-detect point IDs beyond the
+        static :attr:`measure_points` map.
+
+        device_type: DeviceType | int | str | None - Optionally scope the definitions to a single
+            device type. When omitted, the device-type filter is not sent.
+
+        Returns the raw ``result_data`` object from the API (a list/map of point definitions).
+
+        .. note::
+            The docs reference this endpoint by name only and do not publish a full request schema.
+            The ``device_type`` request field mirrors the other device endpoints and is
+            **unverified against a live device**.
+        """
+        uri = "/openapi/platform/getOpenPointInfo"
+        params: dict = {}
+        if device_type is not None:
+            type_id = device_type.value if isinstance(device_type, DeviceType) else int(device_type)
+            params["device_type"] = str(type_id)
+        res = await self.auth.request(uri, params, lang=self.lang)
+        res.raise_for_status()
+        res = await res.json()
+        if res.get("result_code") != "1":
+            _LOGGER.error("Error response from %s: %s", uri, res)
+            raise PySolarCloudException(res)
+        _LOGGER.debug("async_get_open_point_info: %s", res.get("result_data"))
+        return res.get("result_data")
+
     async def async_get_historical_data(
         self,
         plant_id: str | list[str],
