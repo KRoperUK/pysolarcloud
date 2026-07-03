@@ -7,12 +7,11 @@ authors = [
 ]
 description = "A library to interact with Sungrow's iSolarCloud API (KRoperUK fork with battery, EV charger and dispatch extensions)"
 readme = "README.md"
-# The code uses StrEnum (3.11+) and structural pattern matching, so 3.11 is the
-# real floor (the previous ">=3.7" was incorrect).
-requires-python = ">=3.11"
+# The code relies on 3.12 Enum semantics (`value in EnumClass` membership tests),
+# and the only consumer (Home Assistant) requires 3.13, so 3.12 is the floor.
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
@@ -34,7 +33,7 @@ Homepage = "https://github.com/KRoperUK/pysolarcloud"
 Issues = "https://github.com/KRoperUK/pysolarcloud/issues"
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 120
 
 [tool.ruff.lint]
