@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/KRoperUK/pysolarcloud/compare/v0.9.0...v0.9.1) (2026-07-05)
+
+
+### Bug Fixes
+
+* send ps_key_list to getDeviceRealTimeData (fixes result_code 009) ([#26](https://github.com/KRoperUK/pysolarcloud/issues/26)) ([d784012](https://github.com/KRoperUK/pysolarcloud/commit/d78401260d672e705a2ddab3691b564a6a98758d))
+
 ## [0.9.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.8.0...v0.9.0) (2026-07-03)
 
 
