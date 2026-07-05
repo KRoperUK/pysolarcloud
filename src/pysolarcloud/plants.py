@@ -200,6 +200,7 @@ class Plants:
         plant_id: str,
         device_type: DeviceType | int | str,
         *,
+        ps_key_list: list[str] | None = None,
         extra_measure_points: dict[str, str] | None = None,
     ) -> dict:
         """Best-effort device-level realtime fetch for non-inverter devices.
@@ -209,10 +210,22 @@ class Plants:
         a per-device endpoint; when it is not available, this method returns an empty dict rather
         than raising, so callers can feature-detect gracefully.
 
+        ``getDeviceRealTimeData`` keys its result per device and requires the specific devices to
+        query: ``ps_key_list`` (or ``sn_list``) must be supplied or the API rejects the call with
+        ``result_code`` ``009``. Callers that already hold the device list should pass
+        ``ps_key_list`` (each device's ``ps_key`` from :meth:`async_get_plant_devices`) to avoid an
+        extra lookup; when it is omitted, the matching devices are discovered here. If no
+        dispatchable device of ``device_type`` exists, an empty dict is returned.
+
         Returns a dict keyed by device uuid, each value being the same measure-point structure as
         :meth:`async_get_realtime_data`.
         """
         type_id = device_type.value if isinstance(device_type, DeviceType) else int(device_type)
+        if ps_key_list is None:
+            devices = await self.async_get_plant_devices(plant_id, device_types=[type_id])
+            ps_key_list = [str(d["ps_key"]) for d in devices if d.get("ps_key")]
+        if not ps_key_list:
+            return {}
         effective_points = dict(self.measure_points)
         if extra_measure_points:
             effective_points.update(extra_measure_points)
@@ -220,7 +233,7 @@ class Plants:
         res = await self.auth.request(
             uri,
             {
-                "ps_id": str(plant_id),
+                "ps_key_list": ps_key_list,
                 "device_type": str(type_id),
                 "point_id_list": list(effective_points.keys()),
                 "is_get_point_dict": "1",
