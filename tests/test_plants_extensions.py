@@ -102,7 +102,7 @@ async def test_device_realtime_returns_data(auth, plants):
         }
     )
 
-    data = await plants.async_get_device_realtime("123", DeviceType.METER)
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"])
 
     assert "dev-1" in data
     assert data["dev-1"]["11111"]["value"] == 7000.0
@@ -115,7 +115,7 @@ async def test_device_realtime_gracefully_degrades_on_404(auth, plants):
         {"result_code": "E996", "result_msg": "api not found", "result_data": None}, status=404
     )
 
-    data = await plants.async_get_device_realtime("123", 7)
+    data = await plants.async_get_device_realtime("123", 7, ps_key_list=["dev-1"])
 
     assert data == {}
 
@@ -127,7 +127,7 @@ async def test_device_realtime_swallows_known_api_errors(auth, plants):
         {"result_code": "E996", "result_msg": "api not found", "result_data": None}
     )
 
-    data = await plants.async_get_device_realtime("123", DeviceType.METER)
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"])
 
     assert data == {}
 
@@ -142,7 +142,7 @@ async def test_device_realtime_raises_on_unexpected_error(auth, plants):
     )
 
     with pytest.raises(PySolarCloudException):
-        await plants.async_get_device_realtime("123", DeviceType.METER)
+        await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"])
 
 
 @pytest.mark.asyncio
@@ -159,7 +159,7 @@ async def test_device_realtime_accepts_int_device_type(auth, plants):
         }
     )
 
-    await plants.async_get_device_realtime("123", "7")
+    await plants.async_get_device_realtime("123", "7", ps_key_list=["dev-1"])
     call_kwargs = auth.request.call_args.kwargs
     assert "device_type" in auth.request.call_args.args[1] or "data" in call_kwargs
     body = auth.request.call_args.args[1]
@@ -228,7 +228,7 @@ async def test_device_realtime_uses_default_measure_points(auth, plants):
         }
     )
 
-    await plants.async_get_device_realtime("123", DeviceType.METER)
+    await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"])
     body = auth.request.call_args.args[1]
     assert body["point_id_list"] == list(Plants.measure_points.keys())
 
@@ -247,10 +247,62 @@ async def test_device_realtime_merges_extra_points(auth, plants):
         }
     )
 
-    await plants.async_get_device_realtime("123", DeviceType.METER, extra_measure_points={"11111": "ev_power"})
+    await plants.async_get_device_realtime(
+        "123", DeviceType.METER, ps_key_list=["dev-1"], extra_measure_points={"11111": "ev_power"}
+    )
     body = auth.request.call_args.args[1]
     assert "11111" in body["point_id_list"]
     assert "83033" in body["point_id_list"]
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_sends_ps_key_list(auth, plants):
+    """The request carries ps_key_list + device_type (not the old ps_id-only shape).
+
+    Regression: without ps_key_list/sn_list the API rejects the call with
+    result_code 009 "Parameters ps_key_list,sn_list cannot be empty at the same time!".
+    """
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": [], "device_point_list": []}}
+    )
+
+    await plants.async_get_device_realtime("123", DeviceType.INVERTER, ps_key_list=["123_1_1_1"])
+
+    body = auth.request.call_args.args[1]
+    assert body["ps_key_list"] == ["123_1_1_1"]
+    assert body["device_type"] == "1"
+    assert "ps_id" not in body
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_discovers_ps_keys_when_omitted(auth, plants):
+    """When ps_key_list is omitted, device keys are discovered from the device list."""
+    plants.async_get_plant_devices = AsyncMock(
+        return_value=[
+            {"uuid": "inv-1", "ps_key": "123_1_1_1", "device_type": DeviceType.INVERTER},
+            {"uuid": "inv-2", "ps_key": "123_1_1_2", "device_type": DeviceType.INVERTER},
+        ]
+    )
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": [], "device_point_list": []}}
+    )
+
+    await plants.async_get_device_realtime("123", DeviceType.INVERTER)
+
+    plants.async_get_plant_devices.assert_awaited_once()
+    body = auth.request.call_args.args[1]
+    assert body["ps_key_list"] == ["123_1_1_1", "123_1_1_2"]
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_returns_empty_when_no_devices(auth, plants):
+    """No device of the requested type -> empty dict and no realtime API call."""
+    plants.async_get_plant_devices = AsyncMock(return_value=[])
+
+    data = await plants.async_get_device_realtime("123", DeviceType.INVERTER)
+
+    assert data == {}
+    auth.request.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -596,7 +648,7 @@ async def test_device_realtime_skips_devices_without_uuid(auth, plants):
         }
     )
 
-    data = await plants.async_get_device_realtime("123", DeviceType.METER)
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-9"])
     assert set(data.keys()) == {"dev-9"}
     assert data["dev-9"]["power"]["value"] == 2000.0
 
