@@ -109,6 +109,35 @@ async def test_device_realtime_returns_data(auth, plants):
 
 
 @pytest.mark.asyncio
+async def test_device_realtime_unwraps_nested_device_point(auth, plants):
+    """getDeviceRealTimeData nests the device fields under a "device_point" key.
+
+    The uuid and p<id> values must be read from there; reading them at the top level
+    yields uuid=None so every device is skipped and the result is empty (the bug that
+    stopped all per-device sensors from being created).
+    """
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {
+                "point_dict": [
+                    {"point_id": "96", "point_name": "String 1 Voltage", "point_unit": "V"},
+                ],
+                "device_point_list": [
+                    {"device_point": {"uuid": 4841885, "p96": "60.2", "device_name": "Inv"}},
+                ],
+            },
+        }
+    )
+
+    data = await plants.async_get_device_realtime("123", DeviceType.INVERTER, ps_key_list=["dev-1"])
+
+    assert "4841885" in data
+    assert data["4841885"]["96"]["value"] == 60.2
+
+
+@pytest.mark.asyncio
 async def test_device_realtime_gracefully_degrades_on_404(auth, plants):
     """Device realtime endpoint returns {} when the upstream endpoint is absent."""
     auth.request.return_value = _mock_response(
