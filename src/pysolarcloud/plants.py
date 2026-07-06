@@ -9,6 +9,17 @@ from . import _LOGGER, AbstractAuth, PySolarCloudException
 # E994 = "system not found", E996 = "api not found" (see Appendix 2: API Error Code Definitions).
 _DEVICE_ENDPOINT_MISSING_CODES = frozenset({"E994", "E996"})
 
+# The realtime endpoints reject a point_id_list longer than 100 entries (result_code
+# 010: "Parameters point_id_list size is over 100"). Larger point sets (a hybrid
+# inverter's diagnostics plus user-supplied extras) are requested in chunks and merged.
+_MAX_POINT_IDS_PER_REQUEST = 100
+
+
+def _chunked(seq: list, size: int):
+    """Yield successive ``size``-length chunks of ``seq`` (a single chunk when it fits)."""
+    for start in range(0, len(seq), size):
+        yield seq[start : start + size]
+
 
 class DeviceType(Enum):
     """Enum for the device types used by async_get_plant_devices."""
@@ -174,24 +185,26 @@ class Plants:
             measure_points_map = {v: k for k, v in effective_points.items()}
             ms = [m if m.isdigit() else measure_points_map[m] for m in measure_points]
         uri = "/openapi/platform/getPowerStationRealTimeData"
-        res = await self.auth.request(
-            uri, {"ps_id_list": ps, "point_id_list": ms, "is_get_point_dict": "1"}, lang=self.lang
-        )
-        res.raise_for_status()
-        res = await res.json()
-        if res.get("result_code") != "1":
-            _LOGGER.error("Error response from %s: %s", uri, res)
-            raise PySolarCloudException.from_response(res)
-        point_dict = dict([(str(point["point_id"]), point) for point in res["result_data"]["point_dict"]])
-        plants = {}
-        for plant in res["result_data"]["device_point_list"]:
-            data = [
-                self._format_measure_point(k[1:], v, point_dict, effective_points)
-                for k, v in plant.items()
-                if k[0] == "p" and k[1:].isdigit()
-            ]
-            data_as_dict = {d["code"]: d for d in data}
-            plants[str(plant["ps_id"])] = data_as_dict
+        # The endpoint caps point_id_list at 100; request in chunks and merge per plant
+        # so a large measure-point set (defaults plus user extras) doesn't fail the call.
+        plants: dict = {}
+        for chunk in _chunked(ms, _MAX_POINT_IDS_PER_REQUEST):
+            res = await self.auth.request(
+                uri, {"ps_id_list": ps, "point_id_list": chunk, "is_get_point_dict": "1"}, lang=self.lang
+            )
+            res.raise_for_status()
+            res = await res.json()
+            if res.get("result_code") != "1":
+                _LOGGER.error("Error response from %s: %s", uri, res)
+                raise PySolarCloudException.from_response(res)
+            point_dict = dict([(str(point["point_id"]), point) for point in res["result_data"]["point_dict"]])
+            for plant in res["result_data"]["device_point_list"]:
+                data = [
+                    self._format_measure_point(k[1:], v, point_dict, effective_points)
+                    for k, v in plant.items()
+                    if k[0] == "p" and k[1:].isdigit()
+                ]
+                plants.setdefault(str(plant["ps_id"]), {}).update({d["code"]: d for d in data})
         _LOGGER.debug("async_get_realtime_data: %s", plants)
         return plants
 
@@ -235,48 +248,52 @@ class Plants:
         # no explicit points are given.
         effective_points = dict(extra_measure_points) if extra_measure_points else dict(self.measure_points)
         uri = "/openapi/platform/getDeviceRealTimeData"
-        res = await self.auth.request(
-            uri,
-            {
-                "ps_key_list": ps_key_list,
-                "device_type": str(type_id),
-                "point_id_list": list(effective_points.keys()),
-                "is_get_point_dict": "1",
-            },
-            lang=self.lang,
-        )
-        # Many accounts do not have this endpoint; treat transport / API errors as "unsupported"
-        # and let the caller decide how to surface that. We deliberately swallow only the
-        # "endpoint missing" class of failure, not generic 4xx/5xx.
-        if res.status in (404, 405):
-            _LOGGER.debug("Device realtime endpoint unavailable for plant %s type %s", plant_id, type_id)
-            return {}
-        res = await res.json()
-        if res.get("result_code") != "1":
-            if res.get("result_code") in _DEVICE_ENDPOINT_MISSING_CODES:
-                _LOGGER.debug("Device realtime endpoint rejected request: %s", res)
-                return {}
-            _LOGGER.error("Error response from %s: %s", uri, res)
-            raise PySolarCloudException.from_response(res)
-        point_dict_items = res.get("result_data", {}).get("point_dict", []) or []
-        point_dict = {str(p["point_id"]): p for p in point_dict_items}
-        device_lists = res.get("result_data", {}).get("device_point_list", []) or []
+        # getDeviceRealTimeData caps point_id_list at 100 (result_code 010); a hybrid
+        # inverter's diagnostic set plus user extras can exceed that, so request the
+        # points in chunks and merge the per-device results.
         out: dict[str, dict] = {}
-        for entry in device_lists:
-            # getDeviceRealTimeData nests the device fields (uuid + p<id> values) under a
-            # "device_point" key; older/other responses put them at the top level. Unwrap
-            # so the uuid and point values are read from wherever they actually are —
-            # otherwise every device is skipped (uuid=None) and the result is empty.
-            device = entry.get("device_point", entry) if isinstance(entry, dict) else entry
-            uuid = str(device.get("uuid") or device.get("device_id") or "")
-            if not uuid:
-                continue
-            data = [
-                self._format_measure_point(k[1:], v, point_dict, effective_points)
-                for k, v in device.items()
-                if k[0] == "p" and k[1:].isdigit()
-            ]
-            out[uuid] = {d["code"]: d for d in data}
+        for chunk in _chunked(list(effective_points.keys()), _MAX_POINT_IDS_PER_REQUEST):
+            res = await self.auth.request(
+                uri,
+                {
+                    "ps_key_list": ps_key_list,
+                    "device_type": str(type_id),
+                    "point_id_list": chunk,
+                    "is_get_point_dict": "1",
+                },
+                lang=self.lang,
+            )
+            # Many accounts do not have this endpoint; treat transport / API errors as "unsupported"
+            # and let the caller decide how to surface that. We deliberately swallow only the
+            # "endpoint missing" class of failure, not generic 4xx/5xx.
+            if res.status in (404, 405):
+                _LOGGER.debug("Device realtime endpoint unavailable for plant %s type %s", plant_id, type_id)
+                return {}
+            res = await res.json()
+            if res.get("result_code") != "1":
+                if res.get("result_code") in _DEVICE_ENDPOINT_MISSING_CODES:
+                    _LOGGER.debug("Device realtime endpoint rejected request: %s", res)
+                    return {}
+                _LOGGER.error("Error response from %s: %s", uri, res)
+                raise PySolarCloudException.from_response(res)
+            point_dict_items = res.get("result_data", {}).get("point_dict", []) or []
+            point_dict = {str(p["point_id"]): p for p in point_dict_items}
+            device_lists = res.get("result_data", {}).get("device_point_list", []) or []
+            for entry in device_lists:
+                # getDeviceRealTimeData nests the device fields (uuid + p<id> values) under a
+                # "device_point" key; older/other responses put them at the top level. Unwrap
+                # so the uuid and point values are read from wherever they actually are —
+                # otherwise every device is skipped (uuid=None) and the result is empty.
+                device = entry.get("device_point", entry) if isinstance(entry, dict) else entry
+                uuid = str(device.get("uuid") or device.get("device_id") or "")
+                if not uuid:
+                    continue
+                data = [
+                    self._format_measure_point(k[1:], v, point_dict, effective_points)
+                    for k, v in device.items()
+                    if k[0] == "p" and k[1:].isdigit()
+                ]
+                out.setdefault(uuid, {}).update({d["code"]: d for d in data})
         return out
 
     async def async_get_dev_property_point_value(

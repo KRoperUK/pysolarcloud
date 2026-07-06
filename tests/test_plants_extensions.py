@@ -793,5 +793,83 @@ def test_device_type_37_alias_and_backwards_compat():
     assert DeviceType.PCS is DeviceType.ENERGY_STORAGE_SYSTEM_2
 
 
+def _points_present_response(id_value_map, *, key="uuid", ident="dev-1"):
+    """Build a side_effect that answers each chunk with only the points it asked for.
+
+    Robust to how many chunks the point set is split into: each request returns the
+    subset of ``id_value_map`` whose IDs appear in that chunk's point_id_list.
+    """
+
+    def _side_effect(uri, body, lang=None):
+        ids = set(body["point_id_list"])
+        present = {pid: val for pid, val in id_value_map.items() if pid in ids}
+        device = {key: ident, **{f"p{pid}": val for pid, val in present.items()}}
+        return _mock_response(
+            {
+                "result_code": "1",
+                "result_msg": "success",
+                "result_data": {
+                    "point_dict": [{"point_id": pid, "point_name": pid, "point_unit": "W"} for pid in present],
+                    "device_point_list": [device],
+                },
+            }
+        )
+
+    return _side_effect
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_chunks_over_100_points(auth, plants):
+    """>100 point IDs are split into ≤100-point requests and the results merged.
+
+    getDeviceRealTimeData rejects a point_id_list longer than 100 (result_code 010),
+    so a hybrid inverter's diagnostics plus user extras must be requested in chunks.
+    """
+    extra = {str(i): f"code_{i}" for i in range(150)}
+    # Sentinel points at the start and past the first chunk boundary.
+    auth.request.side_effect = _points_present_response({"0": "10", "100": "20"})
+
+    data = await plants.async_get_device_realtime(
+        "123", DeviceType.INVERTER, ps_key_list=["dev-1"], extra_measure_points=extra
+    )
+
+    # Multiple requests, each within the 100-point cap.
+    assert auth.request.call_count == 2
+    for call in auth.request.call_args_list:
+        assert len(call.args[1]["point_id_list"]) <= 100
+    # Points from both chunks are merged onto the same device.
+    assert data["dev-1"]["code_0"]["value"] == 10.0
+    assert data["dev-1"]["code_100"]["value"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_single_request_when_within_cap(auth, plants):
+    """≤100 points still make exactly one request (no behavioural change)."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": [], "device_point_list": []}}
+    )
+
+    await plants.async_get_device_realtime(
+        "123", DeviceType.INVERTER, ps_key_list=["dev-1"], extra_measure_points={"96": "string_1_voltage"}
+    )
+
+    assert auth.request.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_realtime_data_chunks_over_100_points(auth, plants):
+    """Plant realtime also chunks a >100-point request and merges per plant."""
+    extra = {str(i): f"code_{i}" for i in range(200)}
+    auth.request.side_effect = _points_present_response({"0": "1", "100": "2"}, key="ps_id", ident="123")
+
+    data = await plants.async_get_realtime_data("123", extra_measure_points=extra)
+
+    assert auth.request.call_count >= 2
+    for call in auth.request.call_args_list:
+        assert len(call.args[1]["point_id_list"]) <= 100
+    assert data["123"]["code_0"]["value"] == 1.0
+    assert data["123"]["code_100"]["value"] == 2.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
