@@ -226,9 +226,14 @@ class Plants:
             ps_key_list = [str(d["ps_key"]) for d in devices if d.get("ps_key")]
         if not ps_key_list:
             return {}
-        effective_points = dict(self.measure_points)
-        if extra_measure_points:
-            effective_points.update(extra_measure_points)
+        # When the caller specifies the exact points it wants, request only those: the
+        # 74 plant-level measure points don't apply to an individual device and would
+        # just waste the request budget. getDeviceRealTimeData caps point_id_list at 100
+        # (result_code 010), so padding every device query with the plant points pushed
+        # larger requests (e.g. an inverter's diagnostic set) over the limit and made the
+        # whole call fail. Fall back to the plant points only for feature-detection when
+        # no explicit points are given.
+        effective_points = dict(extra_measure_points) if extra_measure_points else dict(self.measure_points)
         uri = "/openapi/platform/getDeviceRealTimeData"
         res = await self.auth.request(
             uri,
