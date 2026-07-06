@@ -95,3 +95,47 @@ async def test_async_set_parameter_encodes_then_writes():
     control.async_update_parameters = AsyncMock(return_value=[])
     await control.async_set_parameter("dev-1", "soc_upper_limit", 90)
     control.async_update_parameters.assert_awaited_once_with("dev-1", {"soc_upper_limit": "900"})
+
+
+# --- Reactive-power / power-factor control (Appendix 10) ---
+
+
+def test_reactive_power_regulation_mode_enum():
+    # 85 OFF, 161 PF, 162 Q(t), 163 Q(P), 164 Q(U).
+    assert Control.encode_parameter("reactive_power_regulation_mode", "off") == "85"
+    assert Control.encode_parameter("reactive_power_regulation_mode", "PF") == "161"
+    assert Control.encode_parameter("reactive_power_regulation_mode", "q_t") == "162"
+    assert Control.encode_parameter("reactive_power_regulation_mode", "q_p") == "163"
+    assert Control.encode_parameter("reactive_power_regulation_mode", "q_u") == "164"
+    # Raw-code passthrough works too.
+    assert Control.encode_parameter("reactive_power_regulation_mode", "164") == "164"
+
+
+def test_q_t_is_tenths_of_a_percent_signed():
+    # API range -600..600 = -60%..60% -> scale 10, signed.
+    assert Control.encode_parameter("q_t", 30) == "300"
+    assert Control.encode_parameter("q_t", -60) == "-600"
+    assert Control.encode_parameter("q_t", 0) == "0"
+    with pytest.raises(ValueError, match="q_t"):
+        Control.encode_parameter("q_t", 61)
+    with pytest.raises(ValueError, match="q_t"):
+        Control.encode_parameter("q_t", -61)
+
+
+def test_pf_is_thousandths_signed():
+    # API range -1000..1000 = -1..1 -> scale 1000, signed.
+    assert Control.encode_parameter("pf", 0.9) == "900"
+    assert Control.encode_parameter("pf", -1) == "-1000"
+    assert Control.encode_parameter("pf", 1) == "1000"
+    with pytest.raises(ValueError, match="pf"):
+        Control.encode_parameter("pf", 1.5)
+
+
+def test_reactive_response_and_time():
+    assert Control.encode_parameter("reactive_response", "enable") == "170"
+    assert Control.encode_parameter("reactive_response", "disable") == "85"
+    # 1..6000 = 0.1s..600s -> scale 10.
+    assert Control.encode_parameter("reactive_power_regulation_time", 60) == "600"
+    assert Control.encode_parameter("reactive_power_regulation_time", 0.1) == "1"
+    with pytest.raises(ValueError, match="reactive_power_regulation_time"):
+        Control.encode_parameter("reactive_power_regulation_time", 601)
