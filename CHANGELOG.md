@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/KRoperUK/pysolarcloud/compare/v0.10.0...v0.10.1) (2026-07-06)
+
+
+### Bug Fixes
+
+* unwrap nested device_point in getDeviceRealTimeData responses ([#30](https://github.com/KRoperUK/pysolarcloud/issues/30)) ([f61402b](https://github.com/KRoperUK/pysolarcloud/commit/f61402b681a1a354c94bd85c46710f607cec4681))
+
 ## [0.10.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.9.1...v0.10.0) (2026-07-06)
 
 
