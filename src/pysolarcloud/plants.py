@@ -257,7 +257,12 @@ class Plants:
         point_dict = {str(p["point_id"]): p for p in point_dict_items}
         device_lists = res.get("result_data", {}).get("device_point_list", []) or []
         out: dict[str, dict] = {}
-        for device in device_lists:
+        for entry in device_lists:
+            # getDeviceRealTimeData nests the device fields (uuid + p<id> values) under a
+            # "device_point" key; older/other responses put them at the top level. Unwrap
+            # so the uuid and point values are read from wherever they actually are —
+            # otherwise every device is skipped (uuid=None) and the result is empty.
+            device = entry.get("device_point", entry) if isinstance(entry, dict) else entry
             uuid = str(device.get("uuid") or device.get("device_id") or "")
             if not uuid:
                 continue
