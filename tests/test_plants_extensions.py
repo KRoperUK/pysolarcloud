@@ -138,6 +138,27 @@ async def test_device_realtime_unwraps_nested_device_point(auth, plants):
 
 
 @pytest.mark.asyncio
+async def test_device_realtime_requests_only_the_given_points(auth, plants):
+    """With explicit extra points, the request sends only those — not the 74 plant points.
+
+    getDeviceRealTimeData caps point_id_list at 100 (result_code 010); padding a device
+    query with the plant measure points pushed larger requests (e.g. an inverter's
+    diagnostic set) over the limit and failed the whole call.
+    """
+    assert len(plants.measure_points) > 40  # the base plant points that must NOT be sent
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": [], "device_point_list": []}}
+    )
+
+    await plants.async_get_device_realtime(
+        "123", DeviceType.INVERTER, ps_key_list=["dev-1"], extra_measure_points={"96": "string_1_voltage"}
+    )
+
+    sent_points = auth.request.call_args.args[1]["point_id_list"]
+    assert sent_points == ["96"]  # only the requested point, well under the 100 cap
+
+
+@pytest.mark.asyncio
 async def test_device_realtime_gracefully_degrades_on_404(auth, plants):
     """Device realtime endpoint returns {} when the upstream endpoint is absent."""
     auth.request.return_value = _mock_response(
@@ -263,8 +284,12 @@ async def test_device_realtime_uses_default_measure_points(auth, plants):
 
 
 @pytest.mark.asyncio
-async def test_device_realtime_merges_extra_points(auth, plants):
-    """Device realtime can request additional point IDs."""
+async def test_device_realtime_requests_extra_points_without_plant_points(auth, plants):
+    """Device realtime requests the given extra point IDs and omits the plant points.
+
+    The plant measure points don't apply to a single device and would only eat into the
+    100-point cap, so an explicit extra-point request sends just those.
+    """
     auth.request.return_value = _mock_response(
         {
             "result_code": "1",
@@ -281,7 +306,7 @@ async def test_device_realtime_merges_extra_points(auth, plants):
     )
     body = auth.request.call_args.args[1]
     assert "11111" in body["point_id_list"]
-    assert "83033" in body["point_id_list"]
+    assert "83033" not in body["point_id_list"]  # a plant measure point — must NOT be sent
 
 
 @pytest.mark.asyncio
