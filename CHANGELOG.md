@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.3](https://github.com/KRoperUK/pysolarcloud/compare/v0.10.2...v0.10.3) (2026-07-06)
+
+
+### Bug Fixes
+
+* chunk point_id_list so realtime requests never exceed the 100-point cap ([5a115cb](https://github.com/KRoperUK/pysolarcloud/commit/5a115cb9a29a5593235713f18f27bd0021fa723f))
+* chunk point_id_list so realtime requests never exceed the 100-point cap ([5a115cb](https://github.com/KRoperUK/pysolarcloud/commit/5a115cb9a29a5593235713f18f27bd0021fa723f))
+
 ## [0.10.2](https://github.com/KRoperUK/pysolarcloud/compare/v0.10.1...v0.10.2) (2026-07-06)
 
 

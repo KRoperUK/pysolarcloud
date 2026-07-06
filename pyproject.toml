@@ -1,6 +1,6 @@
 [project]
 name = "sungrow-isolarcloud"
-version = "0.10.2"
+version = "0.10.3"
 authors = [
   { name="Tore Green", email="bugjam@e-dreams.dk" },
   { name="KRoperUK" },
