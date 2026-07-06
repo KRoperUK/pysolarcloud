@@ -323,6 +323,25 @@ class Control:
             "min": 0,
             "max": 100,
         },
+        # Reactive-power / power-factor control (Appendix 10). The mode select gates the
+        # others: Q(t) needs mode Q(t); PF needs mode PF; reactive response/time need any
+        # non-OFF mode. Encodings are unambiguous, unlike 10091/10092 (see above).
+        "reactive_power_regulation_mode": {
+            "code": "10009",
+            "kind": "enum",
+            "values": {"off": "85", "pf": "161", "q_t": "162", "q_p": "163", "q_u": "164"},
+        },
+        "q_t": {"code": "10010", "kind": "percent", "unit": "%", "scale": 10, "min": -60, "max": 60},
+        "reactive_response": {"code": "10034", "kind": "enum", "values": {"enable": "170", "disable": "85"}},
+        "reactive_power_regulation_time": {
+            "code": "10035",
+            "kind": "duration",
+            "unit": "s",
+            "scale": 10,
+            "min": 0.1,
+            "max": 600,
+        },
+        "pf": {"code": "10036", "kind": "ratio", "unit": "", "scale": 1000, "min": -1, "max": 1},
     }
 
     @classmethod
