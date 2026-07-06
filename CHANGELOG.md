@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/KRoperUK/pysolarcloud/compare/v0.10.1...v0.10.2) (2026-07-06)
+
+
+### Bug Fixes
+
+* don't pad device realtime with plant points (100-point cap) ([#32](https://github.com/KRoperUK/pysolarcloud/issues/32)) ([f00c5b3](https://github.com/KRoperUK/pysolarcloud/commit/f00c5b3ce971c7aac01642f9a591c3a96f605ffa))
+
 ## [0.10.1](https://github.com/KRoperUK/pysolarcloud/compare/v0.10.0...v0.10.1) (2026-07-06)
 
 
