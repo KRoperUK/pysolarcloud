@@ -106,17 +106,21 @@ control_api = Control(auth)
 # Fetch current config
 current_settings = await control_api.async_read_parameters(device_uuid)
 print(current_settings)
-# Make an update using the canonical command values
+# Make an update using the canonical command values.
+# energy_management_mode (10003) must leave Self-consumption for charge/discharge to actuate:
+# 0 self-consumption, 2 compulsory/forced, 3 external energy dispatch, 4 VPP.
 await control_api.async_update_parameters(
     device_uuid,
     {
+        "energy_management_mode": Control.encode_parameter("energy_management_mode", "compulsory"),
         "charge_discharge_command": Control.CHARGE_DISCHARGE_COMMANDS["charge"],
         "charge_discharge_power": "2500",
     },
 )
 
-# When using External EMS mode, send a heartbeat periodically to keep the inverter in dispatch mode.
+# When using External EMS / forced dispatch, send a heartbeat periodically.
 # 10017 = external_ems_heartbeat, value is the heartbeat interval in seconds (1-1000).
+# Appendix 10: send the heartbeat when switching EMS modes through the API.
 await control_api.async_heartbeat(device_uuid, interval_seconds=60)
 ```
 
