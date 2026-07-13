@@ -32,6 +32,17 @@ def test_enum_by_option_name_case_insensitive():
     assert Control.encode_parameter("charge_discharge_command", "STOP") == "204"
     assert Control.encode_parameter("feed_in_limitation", "enable") == "170"
     assert Control.encode_parameter("battery_first", "disable") == "85"
+    # Energy management mode (10003) — required for charge/discharge to actuate.
+    assert Control.encode_parameter("energy_management_mode", "self_consumption") == "0"
+    assert Control.encode_parameter("energy_management_mode", "compulsory") == "2"
+    assert Control.encode_parameter("energy_management_mode", "external_dispatch") == "3"
+    assert Control.encode_parameter("energy_management_mode", "vpp") == "4"
+
+
+def test_energy_management_mode_in_config_parameters():
+    """Param 10003 must be writable by name so dispatch can leave Self-consumption."""
+    assert Control.config_parameters["10003"] == "energy_management_mode"
+    assert Control.PARAMETER_SPECS["energy_management_mode"]["code"] == "10003"
 
 
 def test_enum_raw_code_passthrough():

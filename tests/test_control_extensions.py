@@ -97,6 +97,21 @@ async def test_heartbeat_loop_survives_api_errors(auth, control):
 
 
 @pytest.mark.asyncio
+async def test_heartbeat_loop_survives_unexpected_errors(auth, control):
+    """Non-API exceptions (e.g. malformed responses) must not kill the heartbeat loop."""
+    auth.request.side_effect = KeyError("result_data")
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(control.heartbeat_loop("dev-1", 1, stop))
+    await asyncio.sleep(0.05)
+    stop.set()
+    await task
+
+    assert auth.request.call_count >= 1
+    assert not task.cancelled()
+
+
+@pytest.mark.asyncio
 async def test_wait_for_task_times_out_when_stuck_running(auth, control):
     """A task stuck in the running state raises instead of looping forever (#12)."""
     auth.request.return_value = _mock_response(
@@ -163,6 +178,7 @@ async def test_async_update_parameters_uses_value_map(auth, control):
             {
                 "charge_discharge_command": Control.CHARGE_DISCHARGE_COMMANDS["charge"],
                 "charge_discharge_power": "2500",
+                "energy_management_mode": Control.encode_parameter("energy_management_mode", "compulsory"),
             },
         )
 
@@ -170,6 +186,8 @@ async def test_async_update_parameters_uses_value_map(auth, control):
     param_codes = {p["param_code"]: p["set_value"] for p in body["param_list"]}
     assert param_codes["10004"] == "170"
     assert param_codes["10005"] == "2500"
+    # Energy management mode must resolve by name to param 10003 (Forced/Compulsory).
+    assert param_codes["10003"] == "2"
 
 
 @pytest.mark.asyncio

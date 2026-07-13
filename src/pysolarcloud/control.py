@@ -81,7 +81,7 @@ class Control:
         if param_list is None:
             ps: list[str] = list(self.config_parameters.keys())
         else:
-            param_map = {v: k for k, v in self.config_parameters.items()}
+            param_map = self._param_code_map()
             ps = [param_map.get(p, p) for p in param_list]
         _LOGGER.debug("async_read_parameters: param_list=%s", ps)
         plist = [{"param_code": p, "set_value": ""} for p in ps]
@@ -106,10 +106,24 @@ class Control:
             return [self._format_param_readout(param, param["return_value"]) for param in results]
         raise PySolarCloudException(f"Could not read parameters from device {device_uuid}: {data}")
 
+    @classmethod
+    def _param_code_map(cls) -> dict[str, str]:
+        """Map parameter names (and raw codes) to on-the-wire param_code strings.
+
+        Prefer :attr:`config_parameters`, then fall back to :attr:`PARAMETER_SPECS` so
+        parameters that are encoded-but-not-listed (historically 10003) still resolve
+        by name when written via :meth:`async_update_parameters` /
+        :meth:`async_set_parameter`.
+        """
+        codes = {v: k for k, v in cls.config_parameters.items()}
+        for name, spec in cls.PARAMETER_SPECS.items():
+            codes.setdefault(name, str(spec["code"]))
+        return codes
+
     async def async_update_parameters(self, device_uuid: str, param_values: dict[str, Any]) -> list[dict[str, Any]]:
         """Update parameters to the device."""
         uri = "/openapi/platform/paramSetting"
-        param_codes = {v: k for k, v in self.config_parameters.items()}
+        param_codes = self._param_code_map()
         plist = [{"param_code": param_codes.get(str(p), str(p)), "set_value": str(v)} for p, v in param_values.items()]
         _LOGGER.debug("async_update_parameters: param_valuest=%s", plist)
         params = {
@@ -158,7 +172,12 @@ class Control:
             try:
                 await self.async_heartbeat(device_uuid, interval_seconds)
             except PySolarCloudException as err:
+                # Expected API/task failures: log and keep the loop alive.
                 _LOGGER.warning("EMS heartbeat failed for %s: %s", device_uuid, err)
+            except Exception as err:  # pylint: disable=broad-except
+                # Unexpected errors (malformed responses, network edge cases) used to kill
+                # the loop silently; keep retrying so dispatch mode does not drop mid-session.
+                _LOGGER.exception("EMS heartbeat unexpected error for %s: %s", device_uuid, err)
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
             except TimeoutError:
@@ -246,11 +265,17 @@ class Control:
         # getDevPropertyPointValue) and add PARAMETER_SPECS with a correct scale/min/max.
         # "10091": "max_charging_power",
         # "10092": "max_discharging_power",
+        # Energy Management Mode (Appendix 10). Required for charge/discharge to take
+        # effect: writing 10004/10005 alone leaves the plant in Self-consumption and the
+        # inverter ignores the command (see sungrow-hass #231). Values: 0 self-consumption,
+        # 2 compulsory/forced, 3 external energy dispatch, 4 VPP. Previously omitted after
+        # early bulk-read validation failures; named writes are resolved via PARAMETER_SPECS
+        # even if a given device rejects a bulk read of this code.
+        "10003": "energy_management_mode",
         # These are defined in API documentation but are rejected by the API as duplicates of 10071 and 10076
         # "10015": "forced_charging_target_soc1",
         # "10016": "forced_charging_target_soc2",
         # These are defined in API documentation but cause validation error from the API
-        # "10003": "energy_management_mode",
         # "10006": "existing_inverter",
         # "10082": "charge_discharge_command_in_external_dispatch_mode",
         # "10083": "charging_discharging_power_in_external_dispatch_mode",
