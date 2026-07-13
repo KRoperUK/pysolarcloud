@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.4](https://github.com/KRoperUK/pysolarcloud/compare/v0.10.3...v0.10.4) (2026-07-13)
+
+
+### Bug Fixes
+
+* re-enable energy management mode (10003) for dispatch ([#36](https://github.com/KRoperUK/pysolarcloud/issues/36)) ([58adfe1](https://github.com/KRoperUK/pysolarcloud/commit/58adfe11f70c8a1944cc3fc3a5b41251c64114fa))
+
 ## [0.10.3](https://github.com/KRoperUK/pysolarcloud/compare/v0.10.2...v0.10.3) (2026-07-06)
 
 
