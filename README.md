@@ -124,6 +124,26 @@ await control_api.async_update_parameters(
 await control_api.async_heartbeat(device_uuid, interval_seconds=60)
 ```
 
+# User-account login (unofficial, experimental)
+
+In addition to the official OpenAPI OAuth flow (`Auth`), this fork provides `UserAuth`,
+which logs in with a normal iSolarCloud **user account** (email + password) via the
+reverse-engineered app/web API — no developer application required.
+
+```python
+from pysolarcloud import Server, UserAuth
+
+async with UserAuth(Server.Europe, "you@example.com", "password") as auth:
+    plants = await auth.async_get_plants()
+    print(plants)
+```
+
+> ⚠️ **Unofficial and experimental.** This is not Sungrow's documented OpenAPI. It may
+> change or break without notice and its use may be subject to Sungrow's terms of
+> service. The protocol was reimplemented clean-room from the MIT-licensed
+> [homebridge-platform-isolarcloud](https://github.com/MortJC/homebridge-platform-isolarcloud)
+> (see `NOTICE`). Credentials are only sent to iSolarCloud over TLS and are never logged.
+
 # Contributions
 Ideas or contributions are welcome. I am not afiliated with Sungrow, I'm just another user of the API. My main use case will be a HomeAssistant integration based on this package.
 
