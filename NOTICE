@@ -1,0 +1,21 @@
+sungrow-isolarcloud (pysolarcloud fork)
+=======================================
+
+This project is licensed under the MIT License (see LICENSE.txt).
+
+Third-party attribution
+-----------------------
+
+The user-account (app/web) login client in `src/pysolarcloud/user_auth.py` is a
+clean-room Python reimplementation of the reverse-engineered iSolarCloud app/web
+login protocol. The protocol details and app-level constants (app key, access key,
+RSA login public key, request envelope) were derived from:
+
+  homebridge-platform-isolarcloud
+  https://github.com/MortJC/homebridge-platform-isolarcloud
+  MIT License, Copyright (c) 2019 MortJC
+
+No GPL-licensed source (e.g. GoSungrow) was used.
+
+The iSolarCloud app/web API is unofficial and undocumented; this client may break
+without notice and its use may be subject to Sungrow's terms of service.

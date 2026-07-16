@@ -9,6 +9,8 @@ setup(
     package_data={"pysolarcloud": ["py.typed"]},
     install_requires=[
         "aiohttp",
+        # AES-ECB + RSA for the user-account (app/web) login envelope (user_auth.py, #40).
+        "cryptography",
     ],
     extras_require={
         # Lint/type-check tools are pinned so results are reproducible and consistent
