@@ -1,0 +1,45 @@
+name: Live smoke test
+
+# Gated live validation of the reverse-engineered user-account (app/web) login (#40/#41).
+# Unit tests use fixtures/crypto round-trips; only a real account can confirm the shipped
+# RSA public key and sys_code are the ones the server currently accepts. Runs on demand
+# and nightly, never on PRs (protects secrets). Skips cleanly without the credential
+# secrets, so a fork or unconfigured repo sees a green, no-op run.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "23 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-smoke
+  cancel-in-progress: true
+
+jobs:
+  live:
+    if: github.repository == 'KRoperUK/pysolarcloud'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Run live user-login smoke test (read-only)
+        # The live_user_credentials fixture skips when its secrets are absent, so this is
+        # a green no-op without them. `-m live` overrides the default `-m 'not live'`.
+        env:
+          SUNGROW_USER_ACCOUNT: ${{ secrets.SUNGROW_USER_ACCOUNT }}
+          SUNGROW_USER_PASSWORD: ${{ secrets.SUNGROW_USER_PASSWORD }}
+          SUNGROW_HOST: ${{ secrets.SUNGROW_HOST }}
+        run: pytest tests/test_user_auth_live.py -m live -o addopts= -v

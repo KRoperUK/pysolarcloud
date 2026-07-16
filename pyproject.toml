@@ -56,7 +56,12 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v"
+# Live tests (marked `live`) hit the real iSolarCloud API and need credentials, so they
+# are deselected by default; the live-smoke workflow runs them explicitly with `-m live`.
+addopts = "-v -m 'not live'"
+markers = [
+    "live: requires live iSolarCloud credentials (deselect with -m 'not live')",
+]
 
 [tool.coverage.run]
 source = ["src/pysolarcloud"]
