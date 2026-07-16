@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.10.4...v0.11.0) (2026-07-16)
+
+
+### Features
+
+* UserAuth clean-room user-account (app/web) login ([#40](https://github.com/KRoperUK/pysolarcloud/issues/40)) ([#42](https://github.com/KRoperUK/pysolarcloud/issues/42)) ([146b5ae](https://github.com/KRoperUK/pysolarcloud/commit/146b5aee8b31922a4fc4535a3f654813eed9580a))
+
+
+### Bug Fixes
+
+* surface login_state failures as typed AuthError with attempts left ([#40](https://github.com/KRoperUK/pysolarcloud/issues/40)) ([#45](https://github.com/KRoperUK/pysolarcloud/issues/45)) ([23183c4](https://github.com/KRoperUK/pysolarcloud/commit/23183c49228a8162552c637d821df0189922d8da))
+
 ## [0.10.4](https://github.com/KRoperUK/pysolarcloud/compare/v0.10.3...v0.10.4) (2026-07-13)
 
 
