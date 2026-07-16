@@ -64,3 +64,7 @@ omit = ["tests/*"]
 
 [tool.coverage.report]
 show_missing = true
+# Coverage floor for the safety-critical library (token rotation, encode_parameter
+# bounds, typed-exception mapping). Currently ~99%; 95 leaves headroom without being
+# brittle. Enforced by pytest-cov in CI (#38).
+fail_under = 95
