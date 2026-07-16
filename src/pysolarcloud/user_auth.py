@@ -68,6 +68,7 @@ PUBLIC_KEY_PEM = (
 
 _LOGIN_PATH = "/v1/userService/login"
 _PLANT_LIST_PATH = "/v1/powerStationService/getPsList"
+_PLANT_DETAIL_PATH = "/v1/powerStationService/getPsDetail"
 
 # Documented result codes meaning the session/login is invalid → re-login (Appendix 2).
 _LOGIN_INVALID_CODES = frozenset({"E00003", "1"})
@@ -261,3 +262,14 @@ class UserAuth:
         result = data.get("result_data") or {}
         page_list = result.get("pageList")
         return list(page_list) if isinstance(page_list, list) else []
+
+    async def async_get_plant_detail(self, ps_id: str | int) -> dict[str, Any]:
+        """Return a plant's detail/realtime payload (``getPsDetail``), for the app/web API.
+
+        Returns the raw ``result_data`` dict (e.g. ``curr_power`` and other plant-level
+        fields). The exact field set is model/region-dependent; consumers map it onto the
+        measure-point model (KRoperUK/sungrow-hass#269). ``valid_flag`` mirrors the
+        reference client.
+        """
+        data = await self.async_request(_PLANT_DETAIL_PATH, {"ps_id": str(ps_id), "valid_flag": "1,3"})
+        return dict(data.get("result_data") or {})
