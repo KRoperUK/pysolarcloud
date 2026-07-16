@@ -233,6 +233,35 @@ async def test_get_plants_empty_when_no_page_list():
     assert await auth.async_get_plants() == []
 
 
+async def test_get_plant_detail_returns_result_data():
+    """async_get_plant_detail returns the plant's result_data payload (#269)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={
+            "result_msg": "success",
+            "result_data": {"curr_power": {"value": "3200", "unit": "W"}, "ps_id": 5},
+        }
+    )
+
+    detail = await auth.async_get_plant_detail(5)
+
+    # ps_id is forwarded in the request body, and the raw result_data comes back.
+    assert auth._post.call_args.args[1]["ps_id"] == "5"
+    assert detail["curr_power"] == {"value": "3200", "unit": "W"}
+
+
+async def test_get_plant_detail_empty_when_no_data():
+    """A response without result_data yields an empty dict, not an error."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success"})
+
+    assert await auth.async_get_plant_detail(5) == {}
+
+
 # --- session lifecycle ------------------------------------------------------
 
 
