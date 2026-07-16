@@ -11,11 +11,14 @@ setup(
         "aiohttp",
     ],
     extras_require={
+        # Lint/type-check tools are pinned so results are reproducible and consistent
+        # with the sungrow-hass integration that consumes this library (#38).
         "dev": [
             "pytest",
             "pytest-asyncio",
             "pytest-cov",
-            "mypy",
+            "ruff==0.15.21",
+            "mypy==2.2.0",
         ],
     },
 )
