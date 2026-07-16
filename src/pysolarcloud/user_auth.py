@@ -43,7 +43,7 @@ from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
-from . import PySolarCloudException, Server
+from . import AuthError, PySolarCloudException, Server
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -195,14 +195,29 @@ class UserAuth:
         return data.get("result_msg") == "success" or str(data.get("result_code")) == "1"
 
     async def async_login(self) -> None:
-        """Log in with the user credentials and store the token + user id."""
+        """Log in with the user credentials and store the token + user id.
+
+        The login endpoint returns the **success envelope** (``result_code`` ``"1"``) even
+        for a rejected account/password — the real signal is ``result_data.login_state ==
+        "1"`` plus a token. ``login_state == "0"`` means the credentials (or region) were
+        rejected; that is surfaced as a typed :class:`AuthError` carrying the API message
+        and the remaining-attempts count (so callers can avoid triggering a lockout) rather
+        than a misleading generic "success" error.
+        """
         body = {**self._common(), "user_account": self._email, "user_password": self._password}
         data = await self._post(_LOGIN_PATH, body, user_id="")
-        if not self._succeeded(data) or not data.get("result_data", {}).get("token"):
-            _LOGGER.error("iSolarCloud user login failed: %s", data.get("result_msg") or data.get("result_code"))
-            raise PySolarCloudException.from_response(data)
-        self.token = str(data["result_data"]["token"])
-        self.user_id = str(data["result_data"]["user_id"])
+        raw_result = data.get("result_data")
+        result: dict[str, Any] = raw_result if isinstance(raw_result, dict) else {}
+        token = result.get("token")
+        login_state = str(result.get("login_state", ""))
+        if not self._succeeded(data) or login_state == "0" or not token:
+            msg = result.get("msg") or data.get("result_msg") or data.get("result_code")
+            remain = result.get("remain_times")
+            suffix = f" ({remain} attempt(s) remaining)" if remain not in (None, "") else ""
+            _LOGGER.error("iSolarCloud user login failed: %s%s", msg, suffix)
+            raise AuthError({"error": "user_login_failed", "error_description": f"Login failed: {msg}{suffix}"})
+        self.token = str(token)
+        self.user_id = str(result.get("user_id"))
         _LOGGER.debug("iSolarCloud user login successful")
 
     async def async_get_token(self) -> str:

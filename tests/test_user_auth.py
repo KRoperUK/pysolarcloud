@@ -93,6 +93,48 @@ async def test_login_failure_raises():
     assert auth.token is None
 
 
+async def test_login_state_zero_raises_auth_error_with_attempts():
+    """A success envelope with login_state 0 (bad creds/region) raises a typed AuthError.
+
+    The login endpoint returns result_code "1" even for a rejected password; the real
+    signal is login_state. The error must expose the remaining-attempts count so callers
+    can avoid triggering a lockout (validated live: this is the real response shape).
+    """
+    from pysolarcloud import AuthError
+
+    auth = _auth()
+    auth._post = AsyncMock(
+        return_value={
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {"login_state": "0", "msg": "account or password incorrect", "remain_times": 1},
+        }
+    )
+
+    with pytest.raises(AuthError) as exc:
+        await auth.async_login()
+    assert auth.token is None
+    assert "1 attempt(s) remaining" in str(exc.value.error_description)
+    assert "account or password incorrect" in str(exc.value.error_description)
+
+
+async def test_login_state_one_with_token_succeeds():
+    """login_state 1 + a token is a real success."""
+    auth = _auth()
+    auth._post = AsyncMock(
+        return_value={
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {"login_state": "1", "token": "T", "user_id": "42"},
+        }
+    )
+
+    await auth.async_login()
+
+    assert auth.token == "T"
+    assert auth.user_id == "42"
+
+
 async def test_get_token_logs_in_once_under_concurrency():
     """Concurrent callers trigger exactly one login (serialised)."""
     auth = _auth()
