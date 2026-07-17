@@ -430,21 +430,19 @@ class Plants:
             raise PySolarCloudException.from_response(res)
         point_dict = dict([(str(point["point_id"]), point) for point in res["result_data"]["point_dict"]])
         plants = {}
-        for plant_id, plant in res["result_data"].items():
-            if plant_id == "point_dict":
+        for ps_id, plant in res["result_data"].items():
+            if ps_id == "point_dict":
                 continue
             series = []
             for frame in plant:
-                data = {}
                 ts = datetime.strptime(frame["time_stamp"], TS_FORMAT)
                 for k, v in frame.items():
                     if k == "time_stamp":
                         continue
-                    else:
-                        data = self._format_measure_point(k[1:], v, point_dict, self.measure_points)
-                        data["timestamp"] = ts
+                    data = self._format_measure_point(k[1:], v, point_dict, self.measure_points)
+                    data["timestamp"] = ts
                     series.append(data)
-            plants[str(plant_id)] = series
+            plants[str(ps_id)] = series
         _LOGGER.debug("async_get_historical_data: %s", plants)
         return plants
 

@@ -58,6 +58,8 @@ class AbstractAuth(ABC):
             case Server.Australia.value:
                 auth_server = "auweb3.isolarcloud.com"
                 cloud_id = 7
+            case _:
+                raise ValueError(f"Unknown iSolarCloud server host: {self.host}")
         return f"https://{auth_server}/#/authorized-app?cloudId={cloud_id}&applicationId={self.app_id}&redirectUrl={quote_plus(redirect_uri)}"
 
     @abstractmethod
@@ -178,11 +180,14 @@ class Auth(AbstractAuth):
         await self.async_close()
 
     async def async_authorize(self, code, redirect_uri):
-        """Authorize the user."""
+        """Authorize the user.
+
+        Raises :class:`AuthError` if the token exchange fails.
+        """
         ts = await self.async_fetch_tokens(code, redirect_uri)
         if "access_token" not in ts:
             _LOGGER.error("Authorization failed: %s", str(ts))
-            return
+            raise AuthError({"error": "authorization_failed", "error_description": str(ts)})
         self.tokens = {
             "access_token": ts["access_token"],
             "refresh_token": ts["refresh_token"],

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from pysolarcloud import Auth, PySolarCloudException, Server, TokenRefreshError
+from pysolarcloud import Auth, AuthError, PySolarCloudException, Server, TokenRefreshError
 
 
 def _auth() -> Auth:
@@ -177,6 +177,13 @@ def test_auth_url_china_and_australia_regions():
     assert "cloudId=2" in intl_url
 
 
+def test_auth_url_unknown_server_raises():
+    """An unrecognised server host raises ValueError."""
+    auth = Auth(host="https://unknown.example.com", appkey="k", access_key="s", app_id="9", websession=MagicMock())
+    with pytest.raises(ValueError, match="Unknown iSolarCloud server host"):
+        auth.auth_url("https://cb")
+
+
 @pytest.mark.asyncio
 async def test_request_builds_authenticated_post_body():
     """request() posts to host+path with appkey/lang in the body and auth headers."""
@@ -246,12 +253,13 @@ async def test_async_authorize_stores_tokens_on_success():
 
 
 @pytest.mark.asyncio
-async def test_async_authorize_noop_when_no_access_token():
-    """A fetch response without an access token leaves tokens unset."""
+async def test_async_authorize_raises_when_no_access_token():
+    """A fetch response without an access token raises AuthError."""
     auth = _auth()
     auth.tokens = None
     auth.async_fetch_tokens = AsyncMock(return_value={"error": "bad_code"})
 
-    await auth.async_authorize("code", "https://cb")
+    with pytest.raises(AuthError):
+        await auth.async_authorize("code", "https://cb")
 
     assert auth.tokens is None

@@ -49,7 +49,7 @@ select = [
 ignore = ["E501"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 files = ["src/pysolarcloud"]
 ignore_missing_imports = true
 

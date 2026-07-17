@@ -125,7 +125,7 @@ class Control:
         uri = "/openapi/platform/paramSetting"
         param_codes = self._param_code_map()
         plist = [{"param_code": param_codes.get(str(p), str(p)), "set_value": str(v)} for p, v in param_values.items()]
-        _LOGGER.debug("async_update_parameters: param_valuest=%s", plist)
+        _LOGGER.debug("async_update_parameters: param_values=%s", plist)
         params = {
             "set_type": 0,
             "uuid": str(device_uuid),
