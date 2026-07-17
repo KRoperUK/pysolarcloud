@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/KRoperUK/pysolarcloud/compare/v0.12.0...v0.12.1) (2026-07-17)
+
+
+### Bug Fixes
+
+* historical data loop bug, auth_url default, authorize raises, mypy target, typo ([#54](https://github.com/KRoperUK/pysolarcloud/issues/54)) ([bd25eb2](https://github.com/KRoperUK/pysolarcloud/commit/bd25eb2dc9de0e81fdfebf5e5617a39c23be7cb7))
+
 ## [0.12.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.11.0...v0.12.0) (2026-07-16)
 
 
