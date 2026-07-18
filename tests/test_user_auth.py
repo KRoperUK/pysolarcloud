@@ -281,3 +281,144 @@ async def test_async_close_leaves_injected_session_open():
     auth = UserAuth(Server.Europe, "me@example.com", "secret", websession=session)
     await auth.async_close()
     session.close.assert_not_called()
+
+
+# --- async_get_devices (#53) ------------------------------------------------
+
+
+async def test_get_devices_returns_page_list():
+    """async_get_devices returns the pageList from the device list endpoint."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={
+            "result_msg": "success",
+            "result_data": {
+                "pageList": [
+                    {"uuid": "dev-1", "device_type": 14, "device_name": "Inverter"},
+                    {"uuid": "dev-2", "device_type": 43, "device_name": "Battery"},
+                ]
+            },
+        }
+    )
+
+    devices = await auth.async_get_devices("123")
+
+    assert len(devices) == 2
+    assert devices[0]["uuid"] == "dev-1"
+    assert devices[1]["device_type"] == 43
+
+
+async def test_get_devices_empty_when_no_devices():
+    """An empty response returns an empty list."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    assert await auth.async_get_devices("123") == []
+
+
+# --- async_get_device_realtime (#53) ----------------------------------------
+
+
+async def test_get_device_realtime_returns_result_data():
+    """async_get_device_realtime returns the per-device point data."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={
+            "result_msg": "success",
+            "result_data": {"13003": {"value": "240.5", "unit": "V"}, "13004": {"value": "1.2", "unit": "A"}},
+        }
+    )
+
+    result = await auth.async_get_device_realtime("123", "SN123456")
+
+    assert result["13003"] == {"value": "240.5", "unit": "V"}
+    body = auth._post.call_args.args[1]
+    assert body["sn"] == "SN123456"
+
+
+async def test_get_device_realtime_with_point_ids():
+    """When point_ids is specified, they are passed as a comma-separated points field."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    await auth.async_get_device_realtime("123", "SN1", point_ids=["13003", "13004"])
+
+    body = auth._post.call_args.args[1]
+    assert body["points"] == "13003,13004"
+
+
+# --- async_get_historical_data (#53) ----------------------------------------
+
+
+async def test_get_historical_data_returns_series():
+    """async_get_historical_data returns time-series rows."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={
+            "result_msg": "success",
+            "result_data": [
+                {"time_stamp": "20260718000000", "p83033": "490"},
+                {"time_stamp": "20260718000500", "p83033": "520"},
+            ],
+        }
+    )
+
+    rows = await auth.async_get_historical_data(
+        "123",
+        point_ids=["83033"],
+        start_time="20260718000000",
+        end_time="20260718010000",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["p83033"] == "490"
+    body = auth._post.call_args.args[1]
+    assert body["points"] == "p83033"
+    assert body["minute_interval"] == "5"
+
+
+async def test_get_historical_data_nested_under_ps_id():
+    """Some regions nest the series under the ps_id key in result_data."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={
+            "result_msg": "success",
+            "result_data": {
+                "123": [{"time_stamp": "20260718000000", "p83033": "100"}],
+                "point_dict": [{"point_id": "83033"}],
+            },
+        }
+    )
+
+    rows = await auth.async_get_historical_data(
+        "123", point_ids=["83033"], start_time="20260718000000", end_time="20260718010000"
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["p83033"] == "100"
+
+
+async def test_get_historical_data_empty_result():
+    """An empty response returns an empty list."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": None})
+
+    rows = await auth.async_get_historical_data(
+        "123", point_ids=["83033"], start_time="20260718000000", end_time="20260718010000"
+    )
+
+    assert rows == []
