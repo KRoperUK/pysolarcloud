@@ -331,3 +331,4 @@ class TokenRefreshError(PySolarCloudException):
 # Imported at the end so user_auth can import Server/exceptions from this module without
 # a circular-import failure (the names above are already defined by the time this runs).
 from .user_auth import UserAuth as UserAuth  # noqa: E402
+from .user_control import UserControl as UserControl  # noqa: E402

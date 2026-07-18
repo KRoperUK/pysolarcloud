@@ -3,9 +3,9 @@
 **Not a stable public API.** Used by live/unit tests to answer whether a plain
 iSolarCloud user session can read/write control parameters (Phase 5 spike).
 
-Clean-room only: path *names* and field names are protocol facts; no GPL source
-was used. Payloads for known OpenAPI-shaped tasks mirror Appendix 10 parameter
-codes (e.g. ``10003`` energy management mode) already used by :mod:`pysolarcloud.control`.
+Clean-room only. Live finding: user tokens work on ``/openapi/paramSetting*``
+(no ``/platform`` segment). Developer paths under ``/openapi/platform/…`` return
+401; ``/v1/devService/paramSetting`` often returns logical ``code=4``.
 """
 
 from __future__ import annotations
@@ -21,12 +21,17 @@ from .user_auth import UserAuth
 
 _LOGGER = logging.getLogger(__name__)
 
-# Energy Management Mode (Appendix 10) — the dispatch gate used by the OAuth Control path.
-_EMS_MODE_CODE = "10003"
+# Prefer power-on / common inverter params for probes — EMS mode 10003 is often
+# unavailable on PV-only plants (template code 6).
+_PROBE_PARAM_CODE = "10011"  # Startup/shutdown (live return_value observed)
 _EXPIRE_SECONDS = 120
 
-# Env gate for the optional single write step (default off).
 WRITE_OK_ENV = "SUNGROW_USER_WRITE_OK"
+
+# Working user-token control surface (live-proven).
+WORKING_CHECK_PATH = "/openapi/paramSettingCheck"
+WORKING_SETTING_PATH = "/openapi/paramSetting"
+WORKING_TASK_PATH = "/openapi/getParamSettingTask"
 
 
 @dataclass(frozen=True)
@@ -56,54 +61,43 @@ def _body_param_check(set_type: int) -> BodyBuilder:
     return build
 
 
-def _body_param_setting_read() -> BodyBuilder:
+def _body_param_setting_read(param_code: str = _PROBE_PARAM_CODE) -> BodyBuilder:
     def build(device_uuid: str) -> dict[str, Any]:
         return {
             "set_type": 2,
             "uuid": str(device_uuid),
             "task_name": _task_name("Readback"),
             "expire_second": _EXPIRE_SECONDS,
-            "param_list": [{"param_code": _EMS_MODE_CODE, "set_value": ""}],
+            "param_list": [{"param_code": param_code, "set_value": ""}],
         }
 
     return build
 
 
-def _body_param_setting_write(set_value: str) -> BodyBuilder:
+def _body_param_setting_write(param_code: str, set_value: str) -> BodyBuilder:
     def build(device_uuid: str) -> dict[str, Any]:
         return {
             "set_type": 0,
             "uuid": str(device_uuid),
             "task_name": _task_name("Update"),
             "expire_second": _EXPIRE_SECONDS,
-            "param_list": [{"param_code": _EMS_MODE_CODE, "set_value": str(set_value)}],
+            "param_list": [{"param_code": param_code, "set_value": str(set_value)}],
         }
 
     return build
 
 
-def _body_get_device_param() -> BodyBuilder:
-    def build(device_uuid: str) -> dict[str, Any]:
-        return {
-            "uuid": str(device_uuid),
-            "param_list": [{"param_code": _EMS_MODE_CODE}],
-        }
-
-    return build
-
-
-# Read/check candidates: OpenAPI paths (negative control) + /v1 app-style guesses.
+# Candidates ordered: proven working surface first, then negatives / dead ends.
 READ_CANDIDATES: list[tuple[str, str, BodyBuilder]] = [
-    ("openapi_paramSettingCheck_read", "/openapi/platform/paramSettingCheck", _body_param_check(2)),
-    ("openapi_paramSettingCheck_update", "/openapi/platform/paramSettingCheck", _body_param_check(0)),
-    ("openapi_paramSetting_read", "/openapi/platform/paramSetting", _body_param_setting_read()),
+    ("openapi_paramSettingCheck_read", WORKING_CHECK_PATH, _body_param_check(2)),
+    ("openapi_paramSettingCheck_update", WORKING_CHECK_PATH, _body_param_check(0)),
+    ("openapi_paramSetting_read", WORKING_SETTING_PATH, _body_param_setting_read()),
+    # Developer OAuth paths — expected 401 with a user token.
+    ("platform_paramSettingCheck_read", "/openapi/platform/paramSettingCheck", _body_param_check(2)),
+    ("platform_paramSetting_read", "/openapi/platform/paramSetting", _body_param_setting_read()),
+    # App-style /v1 — check may pass; task often fails with code 4.
     ("v1_dev_paramSettingCheck_read", "/v1/devService/paramSettingCheck", _body_param_check(2)),
-    ("v1_dev_paramSettingCheck_update", "/v1/devService/paramSettingCheck", _body_param_check(0)),
     ("v1_dev_paramSetting_read", "/v1/devService/paramSetting", _body_param_setting_read()),
-    ("v1_dev_getDeviceParam", "/v1/devService/getDeviceParam", _body_get_device_param()),
-    ("v1_dev_setDeviceParam_check_shape", "/v1/devService/setDeviceParam", _body_param_setting_read()),
-    ("v1_device_paramSettingCheck_read", "/v1/deviceService/paramSettingCheck", _body_param_check(2)),
-    ("v1_device_paramSetting_read", "/v1/deviceService/paramSetting", _body_param_setting_read()),
 ]
 
 
@@ -113,46 +107,48 @@ def write_ok_enabled() -> bool:
 
 
 def _envelope_ok(data: dict[str, Any]) -> bool:
-    """True when the outer iSolarCloud envelope claims success."""
     return data.get("result_msg") == "success" or str(data.get("result_code")) == "1"
 
 
-def _control_logical_ok(path: str, data: dict[str, Any]) -> bool:
-    """True when a control probe did useful work — not just an outer success shell.
+def _task_accepted(result: dict[str, Any]) -> bool:
+    """True when paramSetting accepted a task (dev_result_list entry with code 1 + task_id)."""
+    if result.get("task_id") and str(result.get("code", "1")) in {"1", "success"}:
+        return True
+    dev_list = result.get("dev_result_list")
+    if not isinstance(dev_list, list) or not dev_list:
+        return False
+    first = dev_list[0] if isinstance(dev_list[0], dict) else {}
+    return bool(first.get("task_id")) and str(first.get("code")) == "1"
 
-    Live findings (#271): ``/v1/devService/paramSetting`` often returns envelope
-    success with ``result_data: {code: "4"}`` and no ``task_id``. That is a logical
-    failure (task not accepted). Capability checks need ``check_result == "1"``.
-    """
+
+def _control_logical_ok(path: str, data: dict[str, Any]) -> bool:
+    """True when a control probe did useful work — not just an outer success shell."""
     if not _envelope_ok(data):
         return False
     result = data.get("result_data")
     path = path.rstrip("/")
     if path.endswith("paramSettingCheck"):
-        return isinstance(result, dict) and str(result.get("check_result")) == "1"
+        if not isinstance(result, dict):
+            return False
+        if str(result.get("check_result")) != "1":
+            return False
+        # Prefer nested device check when present (OpenAPI shape).
+        devices = result.get("dev_result_list")
+        if isinstance(devices, list) and devices:
+            first = devices[0] if isinstance(devices[0], dict) else {}
+            return str(first.get("check_result", "1")) == "1"
+        return True
     if path.endswith("paramSetting") or path.endswith("setDeviceParam"):
         if not isinstance(result, dict):
             return False
-        # Explicit device/task codes (OpenAPI uses "1" for ok on nested objects).
-        nested = result.get("code")
-        if nested is not None and str(nested) not in {"1", "success"}:
-            return False
-        if result.get("task_id"):
-            return True
-        dev_list = result.get("dev_result_list")
-        if isinstance(dev_list, list) and dev_list:
-            return True
-        if result.get("param_list"):
-            return True
-        # Bare {code: "1"} without task payload is weak but treat as ok.
-        return nested is not None and str(nested) in {"1", "success"}
-    if path.endswith("getDeviceParam"):
-        return bool(result)
+        # Bare {code: "4"} / {code: "6"} without task_id is a logical failure.
+        if "code" in result and not result.get("task_id") and not result.get("dev_result_list"):
+            return str(result.get("code")) in {"1", "success"}
+        return _task_accepted(result)
     return True
 
 
 def _summarize_envelope(path: str, data: dict[str, Any]) -> tuple[str | None, str | None, bool, str]:
-    """Return (code, msg, ok, short_detail) without secrets."""
     code = data.get("result_code")
     msg = data.get("result_msg")
     code_s = None if code is None else str(code)
@@ -161,12 +157,12 @@ def _summarize_envelope(path: str, data: dict[str, Any]) -> tuple[str | None, st
     result = data.get("result_data")
     detail_bits = [f"code={code_s}", f"msg={msg_s}"]
     if isinstance(result, dict):
-        # Surface common control-task fields without dumping everything.
         for key in ("check_result", "check_msg", "command_status", "task_id", "code", "dev_result_list"):
             if key in result:
                 val = result[key]
-                if key == "dev_result_list" and isinstance(val, list):
-                    detail_bits.append(f"dev_results={len(val)}")
+                if key == "dev_result_list" and isinstance(val, list) and val:
+                    first = val[0] if isinstance(val[0], dict) else {}
+                    detail_bits.append(f"dev0_code={first.get('code')!r},dev0_task={first.get('task_id')!r}")
                 else:
                     detail_bits.append(f"{key}={val!r}")
     elif result is not None:
@@ -180,19 +176,15 @@ def classify_probe_results(results: list[ProbeResult]) -> str:
         return "inconclusive"
     any_ok = any(r.ok for r in results)
     if any_ok:
-        # Prefer a path that looks like an actual param read/task, not only *Check.
         readish = [
-            r
-            for r in results
-            if r.ok
-            and (
-                r.path.rstrip("/").endswith("/paramSetting")
-                or r.path.rstrip("/").endswith("/getDeviceParam")
-                or r.path.rstrip("/").endswith("/setDeviceParam")
-            )
+            r for r in results if r.ok and r.path.rstrip("/").endswith("/paramSetting") and "platform" not in r.path
         ]
-        return "supported_read" if readish else "partial"
-    # All failed: if every response is empty/malformed treat as inconclusive.
+        # Working surface is /openapi/paramSetting (not /platform, not necessarily only that).
+        if any(r.ok and r.path == WORKING_SETTING_PATH for r in results):
+            return "supported_read"
+        if readish:
+            return "supported_read"
+        return "partial"
     if all(r.result_code is None and r.result_msg is None for r in results):
         return "inconclusive"
     return "unsupported"
@@ -237,12 +229,13 @@ async def probe_read_candidates(auth: UserAuth, device_uuid: str) -> list[ProbeR
 def pick_write_path(results: list[ProbeResult]) -> tuple[str, str] | None:
     """Pick a write path/label from a successful read-shaped probe, if any."""
     for r in results:
+        if r.ok and r.path == WORKING_SETTING_PATH:
+            return "openapi_paramSetting_write", r.path
+    for r in results:
         if not r.ok:
             continue
-        if r.path.endswith("/paramSetting"):
+        if r.path.rstrip("/").endswith("/paramSetting") and "platform" not in r.path:
             return r.label.replace("_read", "_write"), r.path
-        if "setDeviceParam" in r.path:
-            return r.label + "_write", r.path
     return None
 
 
@@ -252,13 +245,14 @@ async def probe_idempotent_write(
     *,
     path: str,
     label: str,
-    set_value: str = "0",
+    param_code: str = "10012",
+    set_value: str = "85",
 ) -> ProbeResult:
-    """Attempt a single EMS-mode write (default self-consumption raw ``0``).
+    """Single write of a known-safe value (default: feed-in limitation disable=85).
 
     Caller must enforce :func:`write_ok_enabled`. Does not charge/discharge.
     """
-    body = _body_param_setting_write(set_value)(device_uuid)
+    body = _body_param_setting_write(param_code, set_value)(device_uuid)
     try:
         data = await auth.async_request_soft(path, body)
     except Exception as err:  # pylint: disable=broad-except
