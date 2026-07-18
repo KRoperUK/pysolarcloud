@@ -149,3 +149,97 @@ def test_write_ok_enabled(monkeypatch):
     assert probe.write_ok_enabled() is False
     monkeypatch.setenv(probe.WRITE_OK_ENV, "1")
     assert probe.write_ok_enabled() is True
+
+
+def test_task_accepted_and_logical_ok_helpers():
+    assert probe._task_accepted({"task_id": "1", "code": "1"}) is True
+    assert probe._task_accepted({"dev_result_list": [{"task_id": "1", "code": "1"}]}) is True
+    assert probe._task_accepted({"dev_result_list": []}) is False
+    assert probe._task_accepted({"dev_result_list": ["x"]}) is False
+
+    assert probe._control_logical_ok("/x", {"result_code": "0"}) is False
+    assert probe._control_logical_ok("/openapi/paramSettingCheck", {"result_code": "1", "result_data": None}) is False
+    assert (
+        probe._control_logical_ok(
+            "/openapi/paramSettingCheck",
+            {"result_code": "1", "result_data": {"check_result": "0"}},
+        )
+        is False
+    )
+    assert (
+        probe._control_logical_ok(
+            "/openapi/paramSetting",
+            {"result_code": "1", "result_data": None},
+        )
+        is False
+    )
+    assert (
+        probe._control_logical_ok(
+            "/openapi/paramSetting",
+            {"result_code": "1", "result_data": {"code": "1"}},
+        )
+        is True
+    )
+    assert probe._control_logical_ok("/other", {"result_code": "1", "result_data": {}}) is True
+
+
+def test_summarize_non_dict_result_data():
+    code, msg, ok, detail = probe._summarize_envelope(
+        "/x", {"result_code": "1", "result_msg": "success", "result_data": [1, 2]}
+    )
+    assert code == "1"
+    assert "result_type" in detail
+
+
+async def test_probe_idempotent_write_success_and_exception():
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "1"
+
+    async def soft_ok(path: str, body=None):
+        return {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {
+                "check_result": "1",
+                "dev_result_list": [{"code": "1", "task_id": "W1"}],
+            },
+        }
+
+    auth.async_request_soft = soft_ok  # type: ignore[method-assign]
+    ok = await probe.probe_idempotent_write(
+        auth, "9", path=probe.WORKING_SETTING_PATH, label="w", param_code="10012", set_value="85"
+    )
+    assert ok.ok is True
+    assert ok.raw_result_data is not None
+
+    async def soft_raise(path: str, body=None):
+        raise RuntimeError("boom")
+
+    auth.async_request_soft = soft_raise  # type: ignore[method-assign]
+    bad = await probe.probe_idempotent_write(auth, "9", path=probe.WORKING_SETTING_PATH, label="w")
+    assert bad.ok is False
+    assert "RuntimeError" in bad.detail
+
+
+def test_pick_write_path_fallback():
+    results = [
+        ProbeResult("v1_dev_paramSetting_read", "/v1/devService/paramSetting", "1", "success", True, "ok"),
+    ]
+    assert probe.pick_write_path(results) == ("v1_dev_paramSetting_write", "/v1/devService/paramSetting")
+    assert probe.pick_write_path([]) is None
+
+
+def test_select_dispatch_device_uuid_inverter_then_any():
+    assert probe.select_dispatch_device_uuid([{"uuid": "m", "device_type": 7}, {"uuid": "i", "device_type": 1}]) == "i"
+    assert probe.select_dispatch_device_uuid([{"uuid": "m", "device_type": 7}]) == "m"
+    assert probe.select_dispatch_device_uuid([{"device_type": 1}]) is None
+
+
+def test_body_builders():
+    read_body = probe._body_param_setting_read("10011")("uuid-1")
+    assert read_body["set_type"] == 2
+    assert read_body["param_list"][0]["param_code"] == "10011"
+    write_body = probe._body_param_setting_write("10012", "85")("uuid-1")
+    assert write_body["set_type"] == 0
+    assert write_body["param_list"][0]["set_value"] == "85"
