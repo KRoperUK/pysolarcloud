@@ -69,6 +69,9 @@ PUBLIC_KEY_PEM = (
 _LOGIN_PATH = "/v1/userService/login"
 _PLANT_LIST_PATH = "/v1/powerStationService/getPsList"
 _PLANT_DETAIL_PATH = "/v1/powerStationService/getPsDetail"
+_DEVICE_LIST_PATH = "/v1/devService/queryDeviceList"
+_DEVICE_REALTIME_PATH = "/v1/devService/queryDevice"
+_HISTORICAL_DATA_PATH = "/v1/commonService/queryMutiPointDataList"
 
 # Documented result codes meaning the session/login is invalid → re-login (Appendix 2).
 _LOGIN_INVALID_CODES = frozenset({"E00003", "1"})
@@ -273,3 +276,68 @@ class UserAuth:
         """
         data = await self.async_request(_PLANT_DETAIL_PATH, {"ps_id": str(ps_id), "valid_flag": "1,3"})
         return dict(data.get("result_data") or {})
+
+    async def async_get_devices(self, ps_id: str | int) -> list[dict[str, Any]]:
+        """Return the devices for a plant (app/web equivalent of getDeviceListByPsId, #53).
+
+        Returns a list of device dicts, each containing at minimum ``device_type``,
+        ``uuid``, ``device_name``, ``device_model_code``, and ``device_sn``. The exact
+        fields vary by region/firmware.
+        """
+        data = await self.async_request(_DEVICE_LIST_PATH, {"ps_id": str(ps_id)})
+        result = data.get("result_data") or {}
+        page_list = result.get("pageList")
+        if isinstance(page_list, list):
+            return list(page_list)
+        # Some regions nest devices directly in result_data as a list.
+        if isinstance(result, list):
+            return list(result)
+        return []
+
+    async def async_get_device_realtime(
+        self, ps_id: str | int, device_sn: str, *, point_ids: list[str] | None = None
+    ) -> dict[str, Any]:
+        """Return per-device realtime data for a specific device (by serial number, #53).
+
+        Returns a dict of ``{point_id: {value, unit}}`` pairs for the device. If
+        ``point_ids`` is None, all available points are returned.
+        """
+        body: dict[str, Any] = {"ps_id": str(ps_id), "sn": device_sn}
+        if point_ids:
+            body["points"] = ",".join(point_ids)
+        data = await self.async_request(_DEVICE_REALTIME_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_get_historical_data(
+        self,
+        ps_id: str | int,
+        *,
+        point_ids: list[str],
+        start_time: str,
+        end_time: str,
+        interval: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Return historical minute-level data for specified points (#53).
+
+        ``start_time`` / ``end_time``: ``"YYYYMMDDHHmmss"`` format.
+        ``interval``: minutes between samples (default 5, the iSolarCloud update cadence).
+
+        Returns a list of time-series rows, each ``{time_stamp, p<id>: value, ...}``.
+        """
+        body: dict[str, Any] = {
+            "ps_id": str(ps_id),
+            "points": ",".join(f"p{pid}" for pid in point_ids),
+            "start_time_stamp": start_time,
+            "end_time_stamp": end_time,
+            "minute_interval": str(interval),
+        }
+        data = await self.async_request(_HISTORICAL_DATA_PATH, body)
+        result = data.get("result_data")
+        if isinstance(result, list):
+            return list(result)
+        # Some responses nest the series under the ps_id key.
+        if isinstance(result, dict):
+            series = result.get(str(ps_id))
+            if isinstance(series, list):
+                return series
+        return []
