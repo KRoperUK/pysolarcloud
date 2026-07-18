@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.13.0...v0.14.0) (2026-07-18)
+
+
+### Features
+
+* spike user-account control endpoint probe ([#271](https://github.com/KRoperUK/pysolarcloud/issues/271)) ([#58](https://github.com/KRoperUK/pysolarcloud/issues/58)) ([de861a8](https://github.com/KRoperUK/pysolarcloud/commit/de861a8776982a418c8ea58e44c9fb5f8ff193c8))
+
 ## [0.13.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.12.1...v0.13.0) (2026-07-18)
 
 
