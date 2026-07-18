@@ -236,8 +236,13 @@ class UserAuth:
         assert self.token is not None
         return self.token
 
-    async def async_request(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Make an authenticated request, re-logging in once if the token is rejected."""
+    async def async_request_soft(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Make an authenticated request and return the envelope even on API failure.
+
+        Re-logs in once when the token is rejected (same codes as :meth:`async_request`).
+        Does **not** raise on non-success ``result_code`` — useful for probing unknown
+        endpoints (sungrow-hass #271). Network/HTTP errors still propagate from aiohttp.
+        """
         await self.async_get_token()
         payload = {
             **self._common(),
@@ -247,7 +252,6 @@ class UserAuth:
             **(body or {}),
         }
         data = await self._post(path, payload, user_id=self.user_id or "")
-        # The token can expire server-side; re-login once and retry before giving up.
         if not self._succeeded(data) and str(data.get("result_code")) in _LOGIN_INVALID_CODES:
             _LOGGER.debug("iSolarCloud token rejected (%s); re-logging in", data.get("result_code"))
             self.token = None
@@ -255,6 +259,11 @@ class UserAuth:
             payload["user_id"] = self.user_id
             payload["token"] = self.token
             data = await self._post(path, payload, user_id=self.user_id or "")
+        return data
+
+    async def async_request(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Make an authenticated request, re-logging in once if the token is rejected."""
+        data = await self.async_request_soft(path, body)
         if not self._succeeded(data):
             raise PySolarCloudException.from_response(data)
         return data
