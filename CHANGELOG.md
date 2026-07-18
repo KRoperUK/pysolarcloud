@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.12.1...v0.13.0) (2026-07-18)
+
+
+### Features
+
+* add device list, per-device realtime, and historical data to UserAuth ([#53](https://github.com/KRoperUK/pysolarcloud/issues/53)) ([#56](https://github.com/KRoperUK/pysolarcloud/issues/56)) ([63497d7](https://github.com/KRoperUK/pysolarcloud/commit/63497d7b5cefb109846a83b476a1dc551074ba88))
+
 ## [0.12.1](https://github.com/KRoperUK/pysolarcloud/compare/v0.12.0...v0.12.1) (2026-07-17)
 
 
