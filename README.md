@@ -1,5 +1,13 @@
 # sungrow-isolarcloud
 
+[![PyPI version](https://img.shields.io/pypi/v/sungrow-isolarcloud)](https://pypi.org/project/sungrow-isolarcloud/)
+[![Python versions](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.txt)
+[![CI](https://img.shields.io/github/actions/workflow/status/KRoperUK/pysolarcloud/test.yml?branch=main&label=CI)](https://github.com/KRoperUK/pysolarcloud/actions/workflows/test.yml)
+[![Downloads](https://img.shields.io/pypi/dm/sungrow-isolarcloud)](https://pypi.org/project/sungrow-isolarcloud/)
+[![GitHub Release](https://img.shields.io/github/v/release/KRoperUK/pysolarcloud)](https://github.com/KRoperUK/pysolarcloud/releases/latest)
+[![Buy me a coffee](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow)](https://buymeacoffee.com/kroperukc)
+
 A maintained fork of the [pysolarcloud](https://github.com/bugjam/pysolarcloud) library for interacting with Sungrow's [iSolarCloud API](https://developer-api.isolarcloud.com/).
 
 Install from PyPI:
