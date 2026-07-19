@@ -419,6 +419,15 @@ class DeviceNotWritableError(PySolarCloudException):
         self.device_code = device_code
 
 
+# Typed dispatch-parameter metadata (#71). Re-exported at package top level so
+# consumers building UI on top of the library (sungrow-hass) can do
+# ``from pysolarcloud import PARAMETERS, ParameterSpec`` without reaching into the
+# submodule path. Eager: ``parameters`` has no heavy imports.
+from .parameters import PARAMETERS as PARAMETERS  # noqa: E402
+from .parameters import ParameterKind as ParameterKind  # noqa: E402
+from .parameters import ParameterSpec as ParameterSpec  # noqa: E402
+from .parameters import WireKind as WireKind  # noqa: E402
+
 # User-account auth (:class:`UserAuth`) and its :class:`UserControl` companion depend on
 # ``cryptography`` (AES/RSA envelope) which is heavy to import. Defer the submodule import
 # until one of these names is actually referenced (PEP 562 ``__getattr__``) so OAuth-only
