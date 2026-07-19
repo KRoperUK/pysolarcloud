@@ -388,6 +388,34 @@ class TokenRefreshError(PySolarCloudException):
         self.response = response
 
 
+class DeviceNotWritableError(PySolarCloudException):
+    """Raised when a control write is rejected because the device won't accept it.
+
+    Distinguishes "the target device (EV charger, meter, permission-gated inverter)
+    does not accept parameter writes" — a permanent, per-device condition — from
+    generic API/task failures. Consumers can silently skip the device instead of
+    treating the rejection as an unexpected error and retrying.
+
+    The ``code`` returned by the device task envelope (e.g. ``"9"`` for
+    "unsupported") is exposed via :attr:`device_code`, and the original raw response
+    is available on :attr:`response` for debugging.
+    """
+
+    def __init__(self, response: dict, device_code: str | None = None):
+        super().__init__(
+            {
+                "error": "device_not_writable",
+                "error_description": (
+                    f"Device rejected the parameter write (device code {device_code!r})"
+                    if device_code
+                    else "Device rejected the parameter write"
+                ),
+            }
+        )
+        self.response = response
+        self.device_code = device_code
+
+
 # Imported at the end so user_auth can import Server/exceptions from this module without
 # a circular-import failure (the names above are already defined by the time this runs).
 from .user_auth import UserAuth as UserAuth  # noqa: E402

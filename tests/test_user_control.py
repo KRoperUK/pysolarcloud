@@ -165,6 +165,9 @@ async def test_update_and_set_parameter(monkeypatch):
 
 
 async def test_read_parameters_rejects_code_6():
+    """Per-device rejection surfaces as the targeted DeviceNotWritableError (#63)."""
+    from pysolarcloud import DeviceNotWritableError
+
     auth = _auth()
     auth.async_request = AsyncMock(
         return_value={
@@ -177,8 +180,11 @@ async def test_read_parameters_rejects_code_6():
         }
     )
     control = UserControl(auth)
-    with pytest.raises(PySolarCloudException, match="not accepted"):
+    with pytest.raises(DeviceNotWritableError) as exc_info:
         await control.async_read_parameters("9", ["10003"])
+    assert exc_info.value.device_code == "6"
+    # Still a PySolarCloudException so callers that only care about broader failures still catch it.
+    assert isinstance(exc_info.value, PySolarCloudException)
 
 
 async def test_run_task_rejects_check_result_and_empty_dev_list(monkeypatch):

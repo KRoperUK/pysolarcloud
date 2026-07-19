@@ -188,3 +188,39 @@ def test_rate_limit_error_direct_string_construction_has_no_retry_after():
     exc = RateLimitError("throttled")
     assert exc.retry_after is None
     assert exc.error == "throttled"
+
+
+
+# --------------------------------------------------------------------------- #
+# DeviceNotWritableError (#63)
+# --------------------------------------------------------------------------- #
+
+
+def test_device_not_writable_error_is_pysolarcloudexception():
+    """``DeviceNotWritableError`` is a ``PySolarCloudException`` subclass with a typed error code."""
+    from pysolarcloud import DeviceNotWritableError
+
+    raw = {"result_code": "1", "result_data": {"dev_result_list": [{"code": "9"}]}}
+    exc = DeviceNotWritableError(raw, device_code="9")
+
+    assert isinstance(exc, PySolarCloudException)
+    assert exc.error == "device_not_writable"
+    assert exc.device_code == "9"
+    assert exc.response is raw
+
+
+def test_device_not_writable_error_description_includes_device_code():
+    """The human-readable description carries the raw device code when supplied."""
+    from pysolarcloud import DeviceNotWritableError
+
+    exc = DeviceNotWritableError({}, device_code="9")
+    assert "9" in str(exc)
+
+
+def test_device_not_writable_error_without_device_code():
+    """Constructing without a device_code still produces a sensible description."""
+    from pysolarcloud import DeviceNotWritableError
+
+    exc = DeviceNotWritableError({})
+    assert exc.device_code is None
+    assert str(exc)  # non-empty
