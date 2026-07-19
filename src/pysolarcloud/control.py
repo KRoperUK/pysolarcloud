@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Any, cast
 
 from . import _LOGGER, AbstractAuth, DeviceNotWritableError, PySolarCloudException
+from .parameters import _LEGACY_SPECS as _LEGACY_SPECS
+from .parameters import PARAMETERS, ParameterSpec
 
 # Device-task result codes that mean "this device does not accept the write" (as opposed
 # to a transient task/envelope failure). ``code`` of ``"1"`` in ``dev_result_list[0]`` is
@@ -163,14 +165,14 @@ class Control:
     def _param_code_map(cls) -> dict[str, str]:
         """Map parameter names (and raw codes) to on-the-wire param_code strings.
 
-        Prefer :attr:`config_parameters`, then fall back to :attr:`PARAMETER_SPECS` so
+        Prefer :attr:`config_parameters`, then fall back to :attr:`PARAMETERS` so
         parameters that are encoded-but-not-listed (historically 10003) still resolve
         by name when written via :meth:`async_update_parameters` /
         :meth:`async_set_parameter`.
         """
         codes = {v: k for k, v in cls.config_parameters.items()}
-        for name, spec in cls.PARAMETER_SPECS.items():
-            codes.setdefault(name, str(spec["code"]))
+        for name, spec in cls.PARAMETERS.items():
+            codes.setdefault(name, spec.code)
         return codes
 
     async def async_update_parameters(self, device_uuid: str, param_values: dict[str, Any]) -> list[dict[str, Any]]:
@@ -335,87 +337,32 @@ class Control:
         # "10089": "feed_in_limitation_value_in_external_dispatch_mode",
     }
 
-    # Value encodings for the settable control parameters, from Appendix 10 (Control
-    # Parameter Definitions) of the iSolarCloud OpenAPI documentation. ``async_update_parameters``
-    # sends values verbatim, so a caller must send the *raw* value the device expects.
-    # These specs capture how a human-friendly value maps to that raw value:
-    #   - ``scale``: multiply the display value (watts, percent, seconds) to get the raw
-    #     integer, e.g. SOC/ratios are tenths of a percent (700-1000 = 70-100%, scale 10),
-    #     power is in watts (scale 1);
-    #   - ``values``: for enum parameters, an option name -> raw code map.
-    # Use :meth:`encode_parameter` / :meth:`async_set_parameter` to apply them.
-    PARAMETER_SPECS: dict[str, dict[str, Any]] = {
-        "soc_upper_limit": {"code": "10001", "kind": "percent", "unit": "%", "scale": 10, "min": 70, "max": 100},
-        "soc_lower_limit": {"code": "10002", "kind": "percent", "unit": "%", "scale": 10, "min": 0, "max": 50},
-        "energy_management_mode": {
-            "code": "10003",
-            "kind": "enum",
-            "values": {"self_consumption": "0", "compulsory": "2", "external_dispatch": "3", "vpp": "4"},
-        },
-        "charge_discharge_command": {
-            "code": "10004",
-            "kind": "enum",
-            "values": {"charge": "170", "discharge": "187", "stop": "204"},
-        },
-        "charge_discharge_power": {"code": "10005", "kind": "power", "unit": "W", "scale": 1, "min": 0, "max": 5000},
-        "limited_power_switch": {"code": "10007", "kind": "enum", "values": {"enable": "170", "disable": "85"}},
-        "active_power_limit_ratio": {
-            "code": "10008",
-            "kind": "percent",
-            "unit": "%",
-            "scale": 10,
-            "min": 0,
-            "max": 100,
-        },
-        "feed_in_limitation": {"code": "10012", "kind": "enum", "values": {"enable": "170", "disable": "85"}},
-        "feed_in_limitation_value": {"code": "10013", "kind": "power", "unit": "W", "scale": 1, "min": 0, "max": None},
-        "feed_in_limitation_ratio": {
-            "code": "10014",
-            "kind": "percent",
-            "unit": "%",
-            "scale": 10,
-            "min": 0,
-            "max": 100,
-        },
-        "external_ems_heartbeat": {"code": "10017", "kind": "duration", "unit": "s", "scale": 1, "min": 1, "max": 1000},
-        "battery_first": {"code": "10024", "kind": "enum", "values": {"enable": "170", "disable": "85"}},
-        "forced_charging": {"code": "10065", "kind": "enum", "values": {"enable": "170", "disable": "85"}},
-        "forced_charging_target_soc_1": {
-            "code": "10071",
-            "kind": "percent",
-            "unit": "%",
-            "scale": 1,
-            "min": 0,
-            "max": 100,
-        },
-        "forced_charging_target_soc_2": {
-            "code": "10076",
-            "kind": "percent",
-            "unit": "%",
-            "scale": 1,
-            "min": 0,
-            "max": 100,
-        },
-        # Reactive-power / power-factor control (Appendix 10). The mode select gates the
-        # others: Q(t) needs mode Q(t); PF needs mode PF; reactive response/time need any
-        # non-OFF mode. Encodings are unambiguous, unlike 10091/10092 (see above).
-        "reactive_power_regulation_mode": {
-            "code": "10009",
-            "kind": "enum",
-            "values": {"off": "85", "pf": "161", "q_t": "162", "q_p": "163", "q_u": "164"},
-        },
-        "q_t": {"code": "10010", "kind": "percent", "unit": "%", "scale": 10, "min": -60, "max": 60},
-        "reactive_response": {"code": "10034", "kind": "enum", "values": {"enable": "170", "disable": "85"}},
-        "reactive_power_regulation_time": {
-            "code": "10035",
-            "kind": "duration",
-            "unit": "s",
-            "scale": 10,
-            "min": 0.1,
-            "max": 600,
-        },
-        "pf": {"code": "10036", "kind": "ratio", "unit": "", "scale": 1000, "min": -1, "max": 1},
-    }
+    #: Typed metadata for every settable Appendix-10 dispatch parameter (#71).
+    #:
+    #: The authoritative single-source-of-truth for parameter metadata. Consumers
+    #: iterate this to build a UI or look up per-parameter widget hints:
+    #:
+    #: .. code-block:: python
+    #:
+    #:     spec = Control.PARAMETERS["soc_upper_limit"]
+    #:     assert spec.kind == "number"
+    #:     assert (spec.minimum, spec.maximum, spec.step) == (70.0, 100.0, 1.0)
+    #:     assert spec.battery_only is True
+    #:
+    #: The dict is populated at import time from :mod:`pysolarcloud.parameters` so
+    #: the library and any consumer (e.g. sungrow-hass) can't drift on the same
+    #: parameter's shape.
+    PARAMETERS: dict[str, ParameterSpec] = PARAMETERS
+
+    #: Legacy ``dict[str, dict[str, Any]]`` view over :attr:`PARAMETERS`, preserved
+    #: verbatim for backwards compatibility with pre-#71 consumers that read the
+    #: nested dict shape directly (``spec["code"]``, ``spec["kind"]``, ``spec["min"]``,
+    #: ``spec["max"]``, ``spec["scale"]``, ``spec["unit"]``, and — for enums —
+    #: ``spec["values"]``).
+    #:
+    #: New code should read :attr:`PARAMETERS` and use the typed
+    #: :class:`~pysolarcloud.parameters.ParameterSpec` fields directly.
+    PARAMETER_SPECS: dict[str, dict[str, Any]] = _LEGACY_SPECS
 
     @classmethod
     def encode_parameter(cls, name: str, value: object) -> str:
@@ -424,38 +371,39 @@ class Control:
         For enum parameters ``value`` is an option name (e.g. ``"charge"``) or an
         already-raw code. For numeric parameters ``value`` is in the parameter's
         display unit (watts, percent, seconds) and is scaled to the integer the API
-        expects (see :attr:`PARAMETER_SPECS`). Parameters without a spec are returned
+        expects (see :attr:`PARAMETERS`). Parameters without a spec are returned
         as ``str(value)`` unchanged.
 
         Raises:
             ValueError: for an unknown enum option, a non-numeric numeric value, or a
-                numeric value outside the parameter's declared ``min``/``max`` bounds.
+                numeric value outside the parameter's declared ``minimum``/``maximum``
+                bounds.
         """
-        spec = cls.PARAMETER_SPECS.get(name)
+        spec = cls.PARAMETERS.get(name)
         if spec is None:
             return str(value)
-        if spec["kind"] == "enum":
-            values: dict[str, str] = spec["values"]
+        if spec.wire_kind == "enum":
+            options = spec.options or {}
             key = str(value).lower()
-            if key in values:
-                return values[key]
-            if str(value) in values.values():
+            if key in options:
+                return options[key]
+            if str(value) in options.values():
                 return str(value)
-            raise ValueError(f"Unknown option {value!r} for {name}; expected one of {sorted(values)}")
+            raise ValueError(f"Unknown option {value!r} for {name}; expected one of {sorted(options)}")
         try:
             numeric = float(value)  # type: ignore[arg-type]
         except (TypeError, ValueError) as err:
             raise ValueError(f"{name} expects a numeric value, got {value!r}") from err
         # Enforce the declared display-unit bounds before scaling so an out-of-range
         # value is never sent to hardware (#13). Bounds may be omitted or None (open-ended).
-        low = spec.get("min")
-        high = spec.get("max")
+        low = spec.minimum
+        high = spec.maximum
         if (low is not None and numeric < low) or (high is not None and numeric > high):
-            unit = spec.get("unit", "")
+            unit = spec.unit or ""
             low_str = "-inf" if low is None else f"{low}{unit}"
             high_str = "inf" if high is None else f"{high}{unit}"
             raise ValueError(f"{name} value {value!r} out of range [{low_str}, {high_str}]")
-        return str(int(round(numeric * spec.get("scale", 1))))
+        return str(int(round(numeric * spec.scale)))
 
     async def async_set_parameter(self, device_uuid: str, name: str, value: object) -> list[dict[str, Any]]:
         """Encode ``value`` for ``name`` (see :meth:`encode_parameter`) and write it."""
