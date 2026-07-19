@@ -20,6 +20,27 @@ class Server(StrEnum):
     Europe = "https://gateway.isolarcloud.eu"
     Australia = "https://augateway.isolarcloud.com"
 
+    @property
+    def web_console_url(self) -> str:
+        """Return the ``https://`` URL of the region's iSolarCloud web console.
+
+        This is the user-facing dashboard (as opposed to the ``gateway.*`` API host
+        the enum's value carries) — useful for the ``configuration_url`` field on HA
+        device registry entries and for building "Visit iSolarCloud" links.
+        """
+        match self:
+            case Server.China:
+                return "https://web3.isolarcloud.com"
+            case Server.International:
+                return "https://web3.isolarcloud.com.hk"
+            case Server.Europe:
+                return "https://web3.isolarcloud.eu"
+            case Server.Australia:
+                return "https://auweb3.isolarcloud.com"
+        # StrEnum with the four cases above is exhaustive at runtime, but keep the
+        # explicit fallback so a future member can't return None by accident.
+        raise ValueError(f"No web console URL configured for {self!r}")
+
 
 class AbstractAuth(ABC):
     """Abstract class to make authenticated requests.

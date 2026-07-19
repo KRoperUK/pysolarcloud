@@ -263,3 +263,16 @@ async def test_async_authorize_raises_when_no_access_token():
         await auth.async_authorize("code", "https://cb")
 
     assert auth.tokens is None
+
+
+
+def test_server_web_console_url_covers_every_region():
+    """Every :class:`Server` member has a documented public web console URL (#67)."""
+    expected = {
+        Server.China: "https://web3.isolarcloud.com",
+        Server.International: "https://web3.isolarcloud.com.hk",
+        Server.Europe: "https://web3.isolarcloud.eu",
+        Server.Australia: "https://auweb3.isolarcloud.com",
+    }
+    for server, url in expected.items():
+        assert server.web_console_url == url
