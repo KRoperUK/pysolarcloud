@@ -236,16 +236,22 @@ class Auth(AbstractAuth):
             self._refresh_lock = asyncio.Lock()
         async with self._refresh_lock:
             if self.tokens["expires_at"] < int(time.time()):
-                ts = await self.async_refresh_tokens(self.tokens["refresh_token"])
+                current_refresh_token = self.tokens["refresh_token"]
+                ts = await self.async_refresh_tokens(current_refresh_token)
                 if "access_token" not in ts:
                     # The refresh token is no longer valid; the caller must re-authorize.
                     # Raise a typed error rather than letting `ts["access_token"]` surface
                     # a bare KeyError that callers would have to string-match.
                     _LOGGER.error("Token refresh failed: %s", str(ts))
                     raise TokenRefreshError(ts)
+                # iSolarCloud usually rotates the refresh token, but a partial-refresh
+                # response (access_token only, no new refresh_token) does occur in the
+                # wild. In that case the previous refresh token is still valid — keep
+                # it instead of storing ``None`` and immediately breaking the next
+                # refresh (see #62).
                 self.tokens = {
                     "access_token": ts["access_token"],
-                    "refresh_token": ts["refresh_token"],
+                    "refresh_token": ts.get("refresh_token") or current_refresh_token,
                     "expires_at": int(time.time()) + ts["expires_in"] - 20,
                 }
             return self.tokens["access_token"]

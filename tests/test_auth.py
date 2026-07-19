@@ -276,3 +276,41 @@ def test_server_web_console_url_covers_every_region():
     }
     for server, url in expected.items():
         assert server.web_console_url == url
+
+
+
+@pytest.mark.asyncio
+async def test_refresh_missing_refresh_token_preserves_previous():
+    """Partial refresh (access_token only, no refresh_token) keeps the previous refresh token (#62).
+
+    iSolarCloud usually rotates the refresh token on every refresh, but occasionally
+    returns just an access_token — in which case the previous refresh_token is still
+    valid. Without preserving it we'd store ``None`` and immediately fail the next
+    refresh, forcing the user to re-authorize for a transient partial response.
+    """
+    auth = _auth()
+    auth.tokens = {"access_token": "old", "refresh_token": "r-original", "expires_at": 0}
+    auth.async_refresh_tokens = AsyncMock(
+        return_value={"access_token": "new-only", "expires_in": 3600}  # no refresh_token
+    )
+
+    token = await auth.async_get_access_token()
+
+    assert token == "new-only"
+    # The previous refresh_token survives so the next rotation can still use it.
+    assert auth.tokens["refresh_token"] == "r-original"
+
+
+@pytest.mark.asyncio
+async def test_refresh_empty_refresh_token_preserves_previous():
+    """An empty-string ``refresh_token`` in the refresh response is treated as absent (#62)."""
+    auth = _auth()
+    auth.tokens = {"access_token": "old", "refresh_token": "r-original", "expires_at": 0}
+    auth.async_refresh_tokens = AsyncMock(
+        return_value={"access_token": "new", "refresh_token": "", "expires_in": 3600}
+    )
+
+    token = await auth.async_get_access_token()
+
+    assert token == "new"
+    assert auth.tokens["refresh_token"] == "r-original"
