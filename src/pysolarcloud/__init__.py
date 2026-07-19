@@ -321,6 +321,22 @@ class PySolarCloudException(Exception):
         return cls(err)
 
 
+def _parse_retry_after(raw: object) -> float | None:
+    """Best-effort coerce a rate-limit ``retry_after`` value to seconds, or ``None``.
+
+    iSolarCloud has been observed to return the hint as an int, a float, or a numeric
+    string, and (rarely) as ``None``/absent. Anything unparseable is dropped so a
+    flaky server value can't leak through and mislead consumers into a bogus back-off.
+    """
+    if raw is None:
+        return None
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 class AuthError(PySolarCloudException):
     """Raised when the iSolarCloud API rejects a request because the credentials are dead.
 
@@ -332,8 +348,25 @@ class AuthError(PySolarCloudException):
 class RateLimitError(PySolarCloudException):
     """Raised when the iSolarCloud API rejects a request because the call rate limit was hit.
 
-    A thin typed marker; ``.error`` still carries the raw result code.
+    ``.retry_after`` (seconds) is populated when the API includes a ``retry_after`` (or a
+    common alternate spelling) in the error envelope, so consumers can back off precisely
+    instead of guessing at a doubling interval. ``None`` when the API doesn't advertise one.
     """
+
+    #: Server-suggested back-off in seconds, or ``None`` when not advertised.
+    retry_after: float | None
+
+    def __init__(self, err: dict | str):
+        super().__init__(err)
+        if isinstance(err, dict):
+            # Different iSolarCloud deployments (and the developer portal docs) spell
+            # the hint differently; accept the observed variants rather than depending
+            # on a single field name that a future firmware might rename.
+            for key in ("retry_after", "retryAfter", "retry_in", "retry_seconds"):
+                self.retry_after = _parse_retry_after(err.get(key))
+                if self.retry_after is not None:
+                    return
+        self.retry_after = None
 
 
 class TokenRefreshError(PySolarCloudException):

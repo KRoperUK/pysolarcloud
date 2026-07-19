@@ -142,3 +142,49 @@ async def test_business_method_auth_error_caught_by_base(auth, plants):
     auth.request.return_value = _mock_response({"result_code": "E00003", "result_msg": "auth failed"})
     with pytest.raises(PySolarCloudException):
         await plants.async_get_plants()
+
+
+
+# --------------------------------------------------------------------------- #
+# RateLimitError.retry_after (#61)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("key", "raw", "expected"),
+    [
+        ("retry_after", 60, 60.0),
+        ("retry_after", "60", 60.0),
+        ("retry_after", 60.5, 60.5),
+        ("retryAfter", 30, 30.0),
+        ("retry_in", 45, 45.0),
+        ("retry_seconds", 90, 90.0),
+    ],
+)
+def test_rate_limit_error_exposes_retry_after(key, raw, expected):
+    """Server-supplied retry hints (in any observed spelling) are exposed as seconds."""
+    exc = PySolarCloudException.from_response({"result_code": "E999", key: raw})
+    assert isinstance(exc, RateLimitError)
+    assert exc.retry_after == expected
+
+
+@pytest.mark.parametrize("raw", [None, "not-a-number", -1, 0, "", "nope"])
+def test_rate_limit_error_retry_after_none_on_bogus_values(raw):
+    """Unparseable or non-positive retry hints are dropped rather than propagated."""
+    exc = PySolarCloudException.from_response({"result_code": "E998", "retry_after": raw})
+    assert isinstance(exc, RateLimitError)
+    assert exc.retry_after is None
+
+
+def test_rate_limit_error_absent_retry_after_defaults_to_none():
+    """A rate-limit response without any retry hint leaves ``retry_after`` as None."""
+    exc = PySolarCloudException.from_response({"result_code": "E999", "result_msg": "throttled"})
+    assert isinstance(exc, RateLimitError)
+    assert exc.retry_after is None
+
+
+def test_rate_limit_error_direct_string_construction_has_no_retry_after():
+    """A ``RateLimitError`` built from a bare string keeps ``.retry_after`` at ``None``."""
+    exc = RateLimitError("throttled")
+    assert exc.retry_after is None
+    assert exc.error == "throttled"
