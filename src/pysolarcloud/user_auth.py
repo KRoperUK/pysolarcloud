@@ -98,7 +98,10 @@ def _aes_encrypt(payload: dict[str, Any], key: str) -> str:
     padded = padder.update(raw) + padder.finalize()
     encryptor = Cipher(algorithms.AES(key.encode("utf-8")), modes.ECB()).encryptor()
     ciphertext = encryptor.update(padded) + encryptor.finalize()
-    return ciphertext.hex().upper()
+    # ``bytes.hex()`` is typed ``str`` in Python's stubs but some ``cryptography``
+    # versions in CI expose ``ciphertext`` as an ``Any`` (protocol-typed) — coerce
+    # to ``str`` explicitly so the return type is stable across environments.
+    return str(ciphertext.hex().upper())
 
 
 def _aes_decrypt(data: str, key: str) -> dict[str, Any]:
@@ -108,13 +111,20 @@ def _aes_decrypt(data: str, key: str) -> dict[str, Any]:
     padded = decryptor.update(ciphertext) + decryptor.finalize()
     unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
     raw = unpadder.update(padded) + unpadder.finalize()
-    return json.loads(raw.decode("utf-8"))
+    # ``json.loads`` returns ``Any``; the encrypted envelope always decodes to a JSON
+    # object per iSolarCloud's contract, so narrow the return type for downstream typing.
+    decoded: dict[str, Any] = json.loads(raw.decode("utf-8"))
+    return decoded
 
 
 def _rsa_encrypt(value: str, public_key_pem: str) -> str:
     """RSA (PKCS#1 v1.5) encrypt a short string with the login public key → base64."""
     public_key = load_pem_public_key(public_key_pem.encode("utf-8"))
-    ciphertext = public_key.encrypt(value.encode("utf-8"), asym_padding.PKCS1v15())  # type: ignore[union-attr]
+    # ``load_pem_public_key`` returns a union that includes types without ``.encrypt``
+    # in some ``cryptography`` versions (older stubs) and a concrete RSAPublicKey in
+    # others (newer stubs). ``unused-ignore`` prevents mypy from complaining on the
+    # newer-stub side where the ``union-attr`` ignore is unnecessary.
+    ciphertext = public_key.encrypt(value.encode("utf-8"), asym_padding.PKCS1v15())  # type: ignore[union-attr,unused-ignore]
     return base64.b64encode(ciphertext).decode("ascii")
 
 

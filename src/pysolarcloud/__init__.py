@@ -5,6 +5,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from enum import StrEnum
+from typing import Any, cast
 from urllib.parse import quote_plus
 
 from aiohttp import ClientResponse, ClientSession, ClientTimeout
@@ -87,7 +88,7 @@ class AbstractAuth(ABC):
     async def async_get_access_token(self) -> str:
         """Return a valid access token."""
 
-    async def request(self, path: str, data: dict, *, lang: str = "_en_US", **kwargs) -> ClientResponse:
+    async def request(self, path: str, data: dict[str, Any], *, lang: str = "_en_US", **kwargs: Any) -> ClientResponse:
         """Make a request to iSolarCloud.
 
         Parameters:
@@ -115,7 +116,7 @@ class AbstractAuth(ABC):
             headers=headers,
         )
 
-    async def async_fetch_tokens(self, code: str, redirect_uri: str, **kwargs) -> dict:
+    async def async_fetch_tokens(self, code: str, redirect_uri: str, **kwargs: Any) -> dict[str, Any]:
         """Fetch the access and refresh tokens."""
         if headers := kwargs.pop("headers", {}):
             headers = dict(headers)
@@ -137,9 +138,11 @@ class AbstractAuth(ABC):
             headers=headers,
             **kwargs,
         )
-        return await response.json()
+        # aiohttp returns Any from response.json(); the token endpoint always yields a JSON
+        # object per the OpenAPI contract, so narrow to dict[str, Any] for downstream typing.
+        return cast(dict[str, Any], await response.json())
 
-    async def async_refresh_tokens(self, refresh_token: str, **kwargs) -> dict:
+    async def async_refresh_tokens(self, refresh_token: str, **kwargs: Any) -> dict[str, Any]:
         """Refresh the access token."""
         if headers := kwargs.pop("headers", {}):
             headers = dict(headers)
@@ -152,7 +155,7 @@ class AbstractAuth(ABC):
             **kwargs,
             headers=headers,
         )
-        return await response.json()
+        return cast(dict[str, Any], await response.json())
 
 
 class Auth(AbstractAuth):
@@ -169,7 +172,7 @@ class Auth(AbstractAuth):
         app_id: str,
         *,
         websession: ClientSession | None = None,
-    ):
+    ) -> None:
         """Initialize the auth.
 
         If ``websession`` is not supplied, an owned ``ClientSession`` is created with a
@@ -183,7 +186,7 @@ class Auth(AbstractAuth):
                 timeout=ClientTimeout(total=self.DEFAULT_TIMEOUT),
             )
         super().__init__(websession, host, appkey, access_key, app_id)
-        self.tokens = None
+        self.tokens: dict[str, Any] | None = None
         # Serializes token refresh so concurrent callers can't both spend the
         # single-use refresh token. Created lazily inside the running loop to
         # avoid binding the lock to the wrong event loop.
@@ -197,10 +200,10 @@ class Auth(AbstractAuth):
     async def __aenter__(self) -> "Auth":
         return self
 
-    async def __aexit__(self, *exc_info) -> None:
+    async def __aexit__(self, *exc_info: Any) -> None:
         await self.async_close()
 
-    async def async_authorize(self, code, redirect_uri):
+    async def async_authorize(self, code: str, redirect_uri: str) -> None:
         """Authorize the user.
 
         Raises :class:`AuthError` if the token exchange fails.
@@ -227,7 +230,7 @@ class Auth(AbstractAuth):
             )
         # Fast path: a still-valid token needs no refresh and no lock.
         if self.tokens["expires_at"] >= int(time.time()):
-            return self.tokens["access_token"]
+            return cast(str, self.tokens["access_token"])
         # Slow path: serialize refreshes. The refresh token is single-use — iSolarCloud
         # rotates it on first use — so concurrent callers must not both spend it. The
         # first waiter refreshes; the rest see the freshly stored token on the
@@ -254,7 +257,7 @@ class Auth(AbstractAuth):
                     "refresh_token": ts.get("refresh_token") or current_refresh_token,
                     "expires_at": int(time.time()) + ts["expires_in"] - 20,
                 }
-            return self.tokens["access_token"]
+            return cast(str, self.tokens["access_token"])
 
 
 # Documented ``result_code`` values that mean the credentials / authorization are dead and
@@ -282,14 +285,14 @@ class PySolarCloudException(Exception):
     branch reauth-vs-retry by ``isinstance`` instead of maintaining a code list.
     """
 
-    def __init__(self, err: dict | str):
+    def __init__(self, err: dict[str, Any] | str) -> None:
         if isinstance(err, dict):
             # Prefer the legacy "error" key, fall back to the real API's "result_code".
             code = err.get("error") or err.get("result_code")
-            self.error = code
-            self.result_msg = err.get("result_msg")
-            self.error_description = err.get("error_description") or self.result_msg
-            self.req_serial_num = err.get("req_serial_num", None)
+            self.error: str | None = code
+            self.result_msg: str | None = err.get("result_msg")
+            self.error_description: str | None = err.get("error_description") or self.result_msg
+            self.req_serial_num: str | None = err.get("req_serial_num", None)
             super().__init__(self.error_description or code or str(err))
         else:
             super().__init__(err)
@@ -299,7 +302,7 @@ class PySolarCloudException(Exception):
             self.req_serial_num = None
 
     @classmethod
-    def from_response(cls, err: dict | str) -> "PySolarCloudException":
+    def from_response(cls, err: dict[str, Any] | str) -> "PySolarCloudException":
         """Return the most specific exception subclass for an iSolarCloud error response.
 
         Documented ``result_code`` values are mapped to typed subclasses (see
@@ -356,7 +359,7 @@ class RateLimitError(PySolarCloudException):
     #: Server-suggested back-off in seconds, or ``None`` when not advertised.
     retry_after: float | None
 
-    def __init__(self, err: dict | str):
+    def __init__(self, err: dict[str, Any] | str) -> None:
         super().__init__(err)
         if isinstance(err, dict):
             # Different iSolarCloud deployments (and the developer portal docs) spell
@@ -378,7 +381,7 @@ class TokenRefreshError(PySolarCloudException):
     ``response`` for debugging.
     """
 
-    def __init__(self, response: dict | None = None):
+    def __init__(self, response: dict[str, Any] | None = None) -> None:
         super().__init__(
             {
                 "error": "token_refresh_failed",
@@ -401,7 +404,7 @@ class DeviceNotWritableError(PySolarCloudException):
     is available on :attr:`response` for debugging.
     """
 
-    def __init__(self, response: dict, device_code: str | None = None):
+    def __init__(self, response: dict[str, Any], device_code: str | None = None) -> None:
         super().__init__(
             {
                 "error": "device_not_writable",
@@ -425,7 +428,7 @@ class DeviceNotWritableError(PySolarCloudException):
 _LAZY_ATTRS = {"UserAuth", "UserControl"}
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """PEP 562 hook: lazy-import UserAuth / UserControl to avoid eager cryptography load."""
     if name == "UserAuth":
         from .user_auth import UserAuth
