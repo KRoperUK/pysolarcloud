@@ -1,9 +1,17 @@
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, cast
 
 from . import _LOGGER, AbstractAuth, PySolarCloudException
+
+# iSolarCloud's ``getPowerStationPointMinuteDataList`` accepts arbitrary
+# ``start_time_stamp`` / ``end_time_stamp`` values, but wide windows (> a few
+# hours) return incomplete series or timeouts in practice. 3 hours matches the
+# per-call chunk sungrow-hass has been running against production for backfill
+# without observed truncation, so use it as the default paging step for
+# :meth:`Plants.async_iter_historical_data`.
+_DEFAULT_HISTORICAL_CHUNK = timedelta(hours=3)
 
 # result_code values from the per-device realtime endpoint that mean "this endpoint / target is
 # not available for this account" rather than a genuine failure. When we see one of these (or an
@@ -447,6 +455,64 @@ class Plants:
             plants[str(ps_id)] = series
         _LOGGER.debug("async_get_historical_data: %s", plants)
         return plants
+
+    async def async_iter_historical_data(
+        self,
+        plant_id: str,
+        start_time: datetime,
+        end_time: datetime,
+        *,
+        measure_points: list[str] | None = None,
+        interval: timedelta = timedelta(minutes=60),
+        chunk_window: timedelta = _DEFAULT_HISTORICAL_CHUNK,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield historical rows across ``[start_time, end_time)``, transparently paging.
+
+        A thin generator over :meth:`async_get_historical_data` that walks a
+        bounded time window in ``chunk_window``-sized steps. Consumers no
+        longer need to track a ``start_time_stamp`` cursor themselves — the
+        implementation the sungrow-hass integration's backfill manager has
+        been re-implementing lives here now.
+
+        plant_id: str — single plant identifier. Multi-plant callers should iterate
+            across the list themselves; the API's per-call point cap and observed
+            per-chunk truncation make wrapping N plants into one generator lossier.
+        start_time / end_time: absolute ``[start, end)`` bounds.
+        measure_points: point codes or numeric IDs, forwarded to
+            :meth:`async_get_historical_data`.
+        interval: sampling interval within each chunk.
+        chunk_window: maximum span of a single underlying call. Larger values are
+            accepted by the API but return truncated series in practice; the
+            3-hour default matches what backfill has been running against
+            production without observed data loss.
+
+        Rows come out in ascending chronological order (chunks are walked in
+        order; within-chunk ordering is whatever the API returns, which is
+        chronological in practice). An empty window yields nothing. A
+        ``chunk_window`` of zero or negative raises :class:`ValueError` so the
+        loop can't spin.
+        """
+        if chunk_window <= timedelta(0):
+            raise ValueError("chunk_window must be positive")
+        if end_time <= start_time:
+            return
+        cursor = start_time
+        while cursor < end_time:
+            chunk_end = min(cursor + chunk_window, end_time)
+            page = await self.async_get_historical_data(
+                plant_id,
+                cursor,
+                chunk_end,
+                measure_points=measure_points,
+                interval=interval,
+            )
+            # ``async_get_historical_data`` groups rows per plant; a single-plant
+            # call returns exactly one key. Iterate defensively so a future
+            # multi-plant response wouldn't silently drop rows.
+            for rows in page.values():
+                for row in rows:
+                    yield row
+            cursor = chunk_end
 
     def _format_measure_point(
         self,
