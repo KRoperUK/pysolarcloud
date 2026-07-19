@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from . import _LOGGER, AbstractAuth, DeviceNotWritableError, PySolarCloudException
 
@@ -37,7 +37,7 @@ class Control:
         _LOGGER.debug("async_param_config_verification: %s", data)
         if data.get("result_code") == "1" and data["result_data"]["check_result"] == "1":
             supported = data["result_data"]["dev_result_list"][0]["check_result"]
-            return supported == "1"
+            return bool(supported == "1")
         # Envelope failure — route through ``from_response`` so a documented result_code
         # (E00003 → AuthError, E998/E999 → RateLimitError, ...) surfaces as the right
         # typed subclass instead of a stringly-typed base exception (#64).
@@ -52,7 +52,7 @@ class Control:
         return await self.async_param_config_verification(device_uuid, 0)
 
     @staticmethod
-    def _raise_for_param_response(device_uuid: str, data: dict, *, action: str) -> None:
+    def _raise_for_param_response(device_uuid: str, data: dict[str, Any], *, action: str) -> None:
         """Validate a paramSetting response envelope; raise the most specific typed error.
 
         Three distinct failure modes come out of this one endpoint and callers historically
@@ -92,7 +92,9 @@ class Control:
             _LOGGER.debug("paramSetting rejected by device %s (code=%s) on %s", device_uuid, device_code, action)
             raise DeviceNotWritableError(data, device_code=device_code)
 
-    async def wait_for_task(self, device_uuid: str, task_id: str, *, timeout: float = _EXPIRE_SECONDS) -> dict:
+    async def wait_for_task(
+        self, device_uuid: str, task_id: str, *, timeout: float = _EXPIRE_SECONDS
+    ) -> list[dict[str, Any]]:
         """Poll for the task to be completed.
 
         Polls every ``_POLL_INTERVAL`` seconds while the task reports "running"
@@ -119,7 +121,7 @@ class Control:
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
             elif data.get("result_code") == "1" and data["result_data"]["command_status"] == 8:
-                return data["result_data"]["param_list"]
+                return cast(list[dict[str, Any]], data["result_data"]["param_list"])
             else:
                 _LOGGER.error("Task not successful %s: %s", task_id, data)
                 # Envelope-level failure gets typed classification (#64); a "success"
@@ -342,7 +344,7 @@ class Control:
     #     power is in watts (scale 1);
     #   - ``values``: for enum parameters, an option name -> raw code map.
     # Use :meth:`encode_parameter` / :meth:`async_set_parameter` to apply them.
-    PARAMETER_SPECS: dict[str, dict] = {
+    PARAMETER_SPECS: dict[str, dict[str, Any]] = {
         "soc_upper_limit": {"code": "10001", "kind": "percent", "unit": "%", "scale": 10, "min": 70, "max": 100},
         "soc_lower_limit": {"code": "10002", "kind": "percent", "unit": "%", "scale": 10, "min": 0, "max": 50},
         "energy_management_mode": {

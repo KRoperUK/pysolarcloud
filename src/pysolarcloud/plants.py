@@ -1,5 +1,7 @@
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any, cast
 
 from . import _LOGGER, AbstractAuth, PySolarCloudException
 
@@ -15,7 +17,7 @@ _DEVICE_ENDPOINT_MISSING_CODES = frozenset({"E994", "E996"})
 _MAX_POINT_IDS_PER_REQUEST = 100
 
 
-def _chunked(seq: list, size: int):
+def _chunked[T](seq: list[T], size: int) -> Iterator[list[T]]:
     """Yield successive ``size``-length chunks of ``seq`` (a single chunk when it fits)."""
     for start in range(0, len(seq), size):
         yield seq[start : start + size]
@@ -89,7 +91,7 @@ class Plants:
         self.auth = auth
         self.lang = lang
 
-    async def async_get_plants(self) -> list[dict]:
+    async def async_get_plants(self) -> list[dict[str, Any]]:
         """Return the list of plants accessible to the user."""
         uri = "/openapi/platform/queryPowerStationList"
         res = await self.auth.request(uri, {"page": 1, "size": 100})
@@ -102,7 +104,7 @@ class Plants:
         _LOGGER.debug("async_get_plants: %s", plants)
         return plants
 
-    async def async_get_plant_details(self, plant_id: str | list[str]) -> list[dict]:
+    async def async_get_plant_details(self, plant_id: str | list[str]) -> list[dict[str, Any]]:
         """Return details about one or more plants."""
         ps = ",".join(plant_id) if isinstance(plant_id, list) else plant_id
         uri = "/openapi/platform/getPowerStationDetail"
@@ -112,13 +114,13 @@ class Plants:
         if data.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, data)
             raise PySolarCloudException.from_response(data)
-        plants = data["result_data"]["data_list"]
+        plants: list[dict[str, Any]] = data["result_data"]["data_list"]
         _LOGGER.debug("async_get_plant_details: %s", plants)
         return plants
 
     async def async_get_plant_devices(
         self, plant_id: str, *, device_types: list[DeviceType | int] | None = None
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Return details about the devices for a plant."""
         if device_types is None:
             device_types = []
@@ -132,7 +134,7 @@ class Plants:
         if data.get("result_code") != "1":
             _LOGGER.error("Error response from %s: %s", uri, data)
             raise PySolarCloudException.from_response(data)
-        devices = data["result_data"]["pageList"]
+        devices: list[dict[str, Any]] = data["result_data"]["pageList"]
         for device in devices:
             # Convert the device type and fault status to enums
             if device["device_type"] in DeviceType:
@@ -148,7 +150,7 @@ class Plants:
         *,
         measure_points: list[str] | None = None,
         extra_measure_points: dict[str, str] | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Return the latest realtime data from one or more plants.
 
         plant_id: str | list[str] - The ID of the plant or a list of plant IDs.
@@ -187,7 +189,7 @@ class Plants:
         uri = "/openapi/platform/getPowerStationRealTimeData"
         # The endpoint caps point_id_list at 100; request in chunks and merge per plant
         # so a large measure-point set (defaults plus user extras) doesn't fail the call.
-        plants: dict = {}
+        plants: dict[str, Any] = {}
         for chunk in _chunked(ms, _MAX_POINT_IDS_PER_REQUEST):
             res = await self.auth.request(
                 uri, {"ps_id_list": ps, "point_id_list": chunk, "is_get_point_dict": "1"}, lang=self.lang
@@ -215,7 +217,7 @@ class Plants:
         *,
         ps_key_list: list[str] | None = None,
         extra_measure_points: dict[str, str] | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Best-effort device-level realtime fetch for non-inverter devices.
 
         The iSolarCloud plant realtime endpoint aggregates all points at the plant level and does
@@ -251,7 +253,7 @@ class Plants:
         # getDeviceRealTimeData caps point_id_list at 100 (result_code 010); a hybrid
         # inverter's diagnostic set plus user extras can exceed that, so request the
         # points in chunks and merge the per-device results.
-        out: dict[str, dict] = {}
+        out: dict[str, dict[str, Any]] = {}
         for chunk in _chunked(list(effective_points.keys()), _MAX_POINT_IDS_PER_REQUEST):
             res = await self.auth.request(
                 uri,
@@ -298,7 +300,7 @@ class Plants:
 
     async def async_get_dev_property_point_value(
         self, plant_id: str, device_type: DeviceType | int | str, point_ids: list[str]
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Return device property point values (e.g. per-device charge/discharge/feed-in limits).
 
         Appendix 10 (Control Parameter Definitions) documents that the dispatch bounds for several
@@ -340,9 +342,9 @@ class Plants:
             _LOGGER.error("Error response from %s: %s", uri, res)
             raise PySolarCloudException.from_response(res)
         _LOGGER.debug("async_get_dev_property_point_value: %s", res.get("result_data"))
-        return res.get("result_data")
+        return cast(dict[str, Any], res.get("result_data") or {})
 
-    async def async_get_open_point_info(self, device_type: DeviceType | int | str | None = None) -> dict:
+    async def async_get_open_point_info(self, device_type: DeviceType | int | str | None = None) -> dict[str, Any]:
         """Return the available open measuring-point definitions.
 
         The common measuring-point pages (e.g. "Common Plant Measuring Points") note that additional
@@ -361,7 +363,7 @@ class Plants:
             **unverified against a live device**.
         """
         uri = "/openapi/platform/getOpenPointInfo"
-        params: dict = {}
+        params: dict[str, Any] = {}
         if device_type is not None:
             type_id = device_type.value if isinstance(device_type, DeviceType) else int(device_type)
             params["device_type"] = str(type_id)
@@ -372,7 +374,7 @@ class Plants:
             _LOGGER.error("Error response from %s: %s", uri, res)
             raise PySolarCloudException.from_response(res)
         _LOGGER.debug("async_get_open_point_info: %s", res.get("result_data"))
-        return res.get("result_data")
+        return cast(dict[str, Any], res.get("result_data") or {})
 
     async def async_get_historical_data(
         self,
@@ -382,7 +384,7 @@ class Plants:
         *,
         measure_points: list[str] | None = None,
         interval: timedelta = timedelta(minutes=60),
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Return historical data from one or more plants.
 
         plant_id: str | list[str] - The ID of the plant or a list of plant IDs.
@@ -447,8 +449,12 @@ class Plants:
         return plants
 
     def _format_measure_point(
-        self, point_id: str, point_value: str, point_dict: dict, measure_points: dict | None = None
-    ) -> dict:
+        self,
+        point_id: str,
+        point_value: str,
+        point_dict: dict[str, Any],
+        measure_points: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         v: float | str | None
         try:
             v = float(point_value) if point_value is not None else None
