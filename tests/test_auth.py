@@ -263,3 +263,97 @@ async def test_async_authorize_raises_when_no_access_token():
         await auth.async_authorize("code", "https://cb")
 
     assert auth.tokens is None
+
+
+def test_server_web_console_url_covers_every_region():
+    """Every :class:`Server` member has a documented public web console URL (#67)."""
+    expected = {
+        Server.China: "https://web3.isolarcloud.com",
+        Server.International: "https://web3.isolarcloud.com.hk",
+        Server.Europe: "https://web3.isolarcloud.eu",
+        Server.Australia: "https://auweb3.isolarcloud.com",
+    }
+    for server, url in expected.items():
+        assert server.web_console_url == url
+
+
+@pytest.mark.asyncio
+async def test_refresh_missing_refresh_token_preserves_previous():
+    """Partial refresh (access_token only, no refresh_token) keeps the previous refresh token (#62).
+
+    iSolarCloud usually rotates the refresh token on every refresh, but occasionally
+    returns just an access_token — in which case the previous refresh_token is still
+    valid. Without preserving it we'd store ``None`` and immediately fail the next
+    refresh, forcing the user to re-authorize for a transient partial response.
+    """
+    auth = _auth()
+    auth.tokens = {"access_token": "old", "refresh_token": "r-original", "expires_at": 0}
+    auth.async_refresh_tokens = AsyncMock(
+        return_value={"access_token": "new-only", "expires_in": 3600}  # no refresh_token
+    )
+
+    token = await auth.async_get_access_token()
+
+    assert token == "new-only"
+    # The previous refresh_token survives so the next rotation can still use it.
+    assert auth.tokens["refresh_token"] == "r-original"
+
+
+@pytest.mark.asyncio
+async def test_refresh_empty_refresh_token_preserves_previous():
+    """An empty-string ``refresh_token`` in the refresh response is treated as absent (#62)."""
+    auth = _auth()
+    auth.tokens = {"access_token": "old", "refresh_token": "r-original", "expires_at": 0}
+    auth.async_refresh_tokens = AsyncMock(return_value={"access_token": "new", "refresh_token": "", "expires_in": 3600})
+
+    token = await auth.async_get_access_token()
+
+    assert token == "new"
+    assert auth.tokens["refresh_token"] == "r-original"
+
+
+def test_pysolarcloud_import_does_not_load_cryptography():
+    """``import pysolarcloud`` must not pull in ``cryptography`` for OAuth-only consumers (#65).
+
+    Run the check in a fresh subprocess so it isn't polluted by prior imports the test
+    suite has already made in this interpreter (test_user_auth exercises cryptography).
+    """
+    import subprocess
+    import sys
+
+    script = (
+        "import sys, pysolarcloud;"
+        "assert not any(k.startswith('cryptography') for k in sys.modules), "
+        "'cryptography must not load until UserAuth is referenced'"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
+
+
+def test_pysolarcloud_access_of_user_auth_loads_cryptography():
+    """Referencing ``UserAuth`` triggers the deferred cryptography import (#65)."""
+    import subprocess
+    import sys
+
+    script = (
+        "import sys, pysolarcloud;"
+        "_ = pysolarcloud.UserAuth;"
+        "assert any(k.startswith('cryptography') for k in sys.modules), "
+        "'cryptography must load once UserAuth is referenced'"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
+
+
+def test_pysolarcloud_unknown_attribute_raises_attribute_error():
+    """The lazy loader still surfaces unknown names as ``AttributeError`` (PEP 562)."""
+    import pysolarcloud
+
+    with pytest.raises(AttributeError):
+        _ = pysolarcloud.this_does_not_exist  # type: ignore[attr-defined]
+
+
+def test_pysolarcloud_dir_contains_lazy_names():
+    """``dir(pysolarcloud)`` still lists the lazy names for IDE/repl discovery (#65)."""
+    import pysolarcloud
+
+    names = set(dir(pysolarcloud))
+    assert {"UserAuth", "UserControl"}.issubset(names)

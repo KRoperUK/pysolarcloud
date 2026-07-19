@@ -20,6 +20,27 @@ class Server(StrEnum):
     Europe = "https://gateway.isolarcloud.eu"
     Australia = "https://augateway.isolarcloud.com"
 
+    @property
+    def web_console_url(self) -> str:
+        """Return the ``https://`` URL of the region's iSolarCloud web console.
+
+        This is the user-facing dashboard (as opposed to the ``gateway.*`` API host
+        the enum's value carries) — useful for the ``configuration_url`` field on HA
+        device registry entries and for building "Visit iSolarCloud" links.
+        """
+        match self:
+            case Server.China:
+                return "https://web3.isolarcloud.com"
+            case Server.International:
+                return "https://web3.isolarcloud.com.hk"
+            case Server.Europe:
+                return "https://web3.isolarcloud.eu"
+            case Server.Australia:
+                return "https://auweb3.isolarcloud.com"
+        # StrEnum with the four cases above is exhaustive at runtime, but keep the
+        # explicit fallback so a future member can't return None by accident.
+        raise ValueError(f"No web console URL configured for {self!r}")
+
 
 class AbstractAuth(ABC):
     """Abstract class to make authenticated requests.
@@ -215,16 +236,22 @@ class Auth(AbstractAuth):
             self._refresh_lock = asyncio.Lock()
         async with self._refresh_lock:
             if self.tokens["expires_at"] < int(time.time()):
-                ts = await self.async_refresh_tokens(self.tokens["refresh_token"])
+                current_refresh_token = self.tokens["refresh_token"]
+                ts = await self.async_refresh_tokens(current_refresh_token)
                 if "access_token" not in ts:
                     # The refresh token is no longer valid; the caller must re-authorize.
                     # Raise a typed error rather than letting `ts["access_token"]` surface
                     # a bare KeyError that callers would have to string-match.
                     _LOGGER.error("Token refresh failed: %s", str(ts))
                     raise TokenRefreshError(ts)
+                # iSolarCloud usually rotates the refresh token, but a partial-refresh
+                # response (access_token only, no new refresh_token) does occur in the
+                # wild. In that case the previous refresh token is still valid — keep
+                # it instead of storing ``None`` and immediately breaking the next
+                # refresh (see #62).
                 self.tokens = {
                     "access_token": ts["access_token"],
-                    "refresh_token": ts["refresh_token"],
+                    "refresh_token": ts.get("refresh_token") or current_refresh_token,
                     "expires_at": int(time.time()) + ts["expires_in"] - 20,
                 }
             return self.tokens["access_token"]
@@ -294,6 +321,22 @@ class PySolarCloudException(Exception):
         return cls(err)
 
 
+def _parse_retry_after(raw: object) -> float | None:
+    """Best-effort coerce a rate-limit ``retry_after`` value to seconds, or ``None``.
+
+    iSolarCloud has been observed to return the hint as an int, a float, or a numeric
+    string, and (rarely) as ``None``/absent. Anything unparseable is dropped so a
+    flaky server value can't leak through and mislead consumers into a bogus back-off.
+    """
+    if raw is None:
+        return None
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 class AuthError(PySolarCloudException):
     """Raised when the iSolarCloud API rejects a request because the credentials are dead.
 
@@ -305,8 +348,25 @@ class AuthError(PySolarCloudException):
 class RateLimitError(PySolarCloudException):
     """Raised when the iSolarCloud API rejects a request because the call rate limit was hit.
 
-    A thin typed marker; ``.error`` still carries the raw result code.
+    ``.retry_after`` (seconds) is populated when the API includes a ``retry_after`` (or a
+    common alternate spelling) in the error envelope, so consumers can back off precisely
+    instead of guessing at a doubling interval. ``None`` when the API doesn't advertise one.
     """
+
+    #: Server-suggested back-off in seconds, or ``None`` when not advertised.
+    retry_after: float | None
+
+    def __init__(self, err: dict | str):
+        super().__init__(err)
+        if isinstance(err, dict):
+            # Different iSolarCloud deployments (and the developer portal docs) spell
+            # the hint differently; accept the observed variants rather than depending
+            # on a single field name that a future firmware might rename.
+            for key in ("retry_after", "retryAfter", "retry_in", "retry_seconds"):
+                self.retry_after = _parse_retry_after(err.get(key))
+                if self.retry_after is not None:
+                    return
+        self.retry_after = None
 
 
 class TokenRefreshError(PySolarCloudException):
@@ -328,7 +388,56 @@ class TokenRefreshError(PySolarCloudException):
         self.response = response
 
 
-# Imported at the end so user_auth can import Server/exceptions from this module without
-# a circular-import failure (the names above are already defined by the time this runs).
-from .user_auth import UserAuth as UserAuth  # noqa: E402
-from .user_control import UserControl as UserControl  # noqa: E402
+class DeviceNotWritableError(PySolarCloudException):
+    """Raised when a control write is rejected because the device won't accept it.
+
+    Distinguishes "the target device (EV charger, meter, permission-gated inverter)
+    does not accept parameter writes" — a permanent, per-device condition — from
+    generic API/task failures. Consumers can silently skip the device instead of
+    treating the rejection as an unexpected error and retrying.
+
+    The ``code`` returned by the device task envelope (e.g. ``"9"`` for
+    "unsupported") is exposed via :attr:`device_code`, and the original raw response
+    is available on :attr:`response` for debugging.
+    """
+
+    def __init__(self, response: dict, device_code: str | None = None):
+        super().__init__(
+            {
+                "error": "device_not_writable",
+                "error_description": (
+                    f"Device rejected the parameter write (device code {device_code!r})"
+                    if device_code
+                    else "Device rejected the parameter write"
+                ),
+            }
+        )
+        self.response = response
+        self.device_code = device_code
+
+
+# User-account auth (:class:`UserAuth`) and its :class:`UserControl` companion depend on
+# ``cryptography`` (AES/RSA envelope) which is heavy to import. Defer the submodule import
+# until one of these names is actually referenced (PEP 562 ``__getattr__``) so OAuth-only
+# consumers — the vast majority — don't pay the cryptography-import cost at
+# ``import pysolarcloud`` time (#65). ``from pysolarcloud import UserAuth`` still works
+# because Python routes that through ``__getattr__``.
+_LAZY_ATTRS = {"UserAuth", "UserControl"}
+
+
+def __getattr__(name: str):
+    """PEP 562 hook: lazy-import UserAuth / UserControl to avoid eager cryptography load."""
+    if name == "UserAuth":
+        from .user_auth import UserAuth
+
+        return UserAuth
+    if name == "UserControl":
+        from .user_control import UserControl
+
+        return UserControl
+    raise AttributeError(f"module 'pysolarcloud' has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """Include the lazily-loaded names so ``dir(pysolarcloud)`` and IDE completion see them."""
+    return sorted(list(globals().keys()) + list(_LAZY_ATTRS))

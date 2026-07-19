@@ -327,12 +327,37 @@ async def test_read_parameters_raises_when_not_accepted(auth, control):
 
 @pytest.mark.asyncio
 async def test_update_parameters_raises_when_rejected(auth, control):
-    """A rejected update task (dev_result_list code != "1") raises PySolarCloudException."""
+    """A per-device rejection (dev_result_list code != "1") raises the targeted subclass (#63)."""
+    from pysolarcloud import DeviceNotWritableError
+
     auth.request.return_value = _mock_response(
         {"result_code": "1", "result_data": {"check_result": "1", "dev_result_list": [{"code": "0"}]}}
     )
-    with pytest.raises(PySolarCloudException):
+    with pytest.raises(DeviceNotWritableError) as exc_info:
         await control.async_update_parameters("dev-1", {"soc_upper_limit": "900"})
+    assert exc_info.value.device_code == "0"
+    # Still a PySolarCloudException for existing broad ``except`` blocks.
+    assert isinstance(exc_info.value, PySolarCloudException)
+
+
+@pytest.mark.asyncio
+async def test_update_parameters_envelope_failure_routes_to_typed_subclass(auth, control):
+    """A rate-limited envelope (E999) on paramSetting surfaces as ``RateLimitError`` (#64)."""
+    from pysolarcloud import RateLimitError
+
+    auth.request.return_value = _mock_response({"result_code": "E999", "result_msg": "throttled"})
+    with pytest.raises(RateLimitError):
+        await control.async_update_parameters("dev-1", {"soc_upper_limit": "900"})
+
+
+@pytest.mark.asyncio
+async def test_read_parameters_envelope_auth_error_routes_to_typed_subclass(auth, control):
+    """An auth-dead envelope (E00003) on paramSetting surfaces as ``AuthError`` (#64)."""
+    from pysolarcloud import AuthError
+
+    auth.request.return_value = _mock_response({"result_code": "E00003", "result_msg": "dead"})
+    with pytest.raises(AuthError):
+        await control.async_read_parameters("dev-1", ["soc_upper_limit"])
 
 
 def test_format_param_readout_maps_enum_value_sets(control):

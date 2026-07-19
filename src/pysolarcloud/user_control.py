@@ -29,7 +29,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from . import PySolarCloudException
+from . import DeviceNotWritableError, PySolarCloudException
 from .control import Control
 from .user_auth import UserAuth
 
@@ -114,6 +114,12 @@ class UserControl:
             "param_list": param_list,
         }
         data = await self.auth.async_request(_PATH_SETTING, body)
+        # Envelope-level failure (result_code != "1") goes through ``from_response`` for
+        # typed AuthError/RateLimitError classification (#64). Absent result_code stays
+        # with the descriptive message so debugging isn't reduced to a raw-dict print.
+        result_code = data.get("result_code")
+        if result_code is not None and str(result_code) != "1":
+            raise PySolarCloudException.from_response(data)
         result = data.get("result_data") or {}
         # check_result "1" = accepted; "9" = do not repeat (rate limit); others = reject.
         if str(result.get("check_result")) != "1":
@@ -124,8 +130,14 @@ class UserControl:
         if not dev_list:
             raise PySolarCloudException(f"paramSetting missing dev_result_list for {device_uuid}: {data}")
         device_result = dev_list[0]
-        if str(device_result.get("code")) != "1" or not device_result.get("task_id"):
-            raise PySolarCloudException(f"paramSetting task not accepted for {device_uuid}: {device_result}")
+        # Per-device rejection: the envelope was OK but this specific device won't accept
+        # the write (permission-gated, EV charger, meter, unsupported). Raise the targeted
+        # ``DeviceNotWritableError`` so consumers can silently skip the device instead of
+        # retrying blindly (#63).
+        device_code = str(device_result.get("code"))
+        if device_code != "1" or not device_result.get("task_id"):
+            _LOGGER.debug("paramSetting rejected by device %s (code=%s)", device_uuid, device_code)
+            raise DeviceNotWritableError(data, device_code=device_code)
         task_id = str(device_result["task_id"])
         rows = await self._wait_for_task(device_uuid, task_id)
         # Prefer return_value on read-back; fall back to set_value (write confirmation).
@@ -159,4 +171,10 @@ class UserControl:
             if status == _TASK_SUCCESS:
                 params = result.get("param_list") or []
                 return list(params) if isinstance(params, list) else []
+            _LOGGER.error("Task not successful %s: %s", task_id, data)
+            # Envelope-level failure gets typed classification (#64); a "success"
+            # envelope with a bad command_status stays as the base exception with a
+            # descriptive message.
+            if data.get("result_code") != "1":
+                raise PySolarCloudException.from_response(data)
             raise PySolarCloudException(f"Task not successful {task_id}: {data}")

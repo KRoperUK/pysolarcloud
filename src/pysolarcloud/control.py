@@ -3,7 +3,14 @@ import contextlib
 from datetime import datetime
 from typing import Any
 
-from . import _LOGGER, AbstractAuth, PySolarCloudException
+from . import _LOGGER, AbstractAuth, DeviceNotWritableError, PySolarCloudException
+
+# Device-task result codes that mean "this device does not accept the write" (as opposed
+# to a transient task/envelope failure). ``code`` of ``"1"`` in ``dev_result_list[0]`` is
+# accepted; other codes are device-level rejections. ``"9"`` has been observed as the
+# "device not supported / not writable" signal (see user_control.py's check_result "9"
+# comment); we treat any non-"1" here as not-writable when the envelope itself was OK.
+_DEVICE_TASK_ACCEPTED = "1"
 
 # Server-side task lifetime (``expire_second``) used when submitting a param-setting
 # task. It doubles as the default client-side deadline for :meth:`Control.wait_for_task`
@@ -31,7 +38,10 @@ class Control:
         if data.get("result_code") == "1" and data["result_data"]["check_result"] == "1":
             supported = data["result_data"]["dev_result_list"][0]["check_result"]
             return supported == "1"
-        raise PySolarCloudException(f"Could not check support for device {device_uuid} set_type {set_type}: {data}")
+        # Envelope failure — route through ``from_response`` so a documented result_code
+        # (E00003 → AuthError, E998/E999 → RateLimitError, ...) surfaces as the right
+        # typed subclass instead of a stringly-typed base exception (#64).
+        raise PySolarCloudException.from_response(data)
 
     async def async_check_read_support(self, device_uuid: str) -> bool:
         """Check if the device supports read operations."""
@@ -40,6 +50,47 @@ class Control:
     async def async_check_update_support(self, device_uuid: str) -> bool:
         """Check if the device supports read operations."""
         return await self.async_param_config_verification(device_uuid, 0)
+
+    @staticmethod
+    def _raise_for_param_response(device_uuid: str, data: dict, *, action: str) -> None:
+        """Validate a paramSetting response envelope; raise the most specific typed error.
+
+        Three distinct failure modes come out of this one endpoint and callers historically
+        collapsed them into a single stringly-typed ``PySolarCloudException``:
+
+        1. Envelope failure (``result_code != "1"``) — route through
+           :meth:`PySolarCloudException.from_response` so documented codes surface as
+           :class:`AuthError` / :class:`RateLimitError` (#64). A malformed response with
+           no ``result_code`` at all keeps the descriptive message so debugging isn't
+           reduced to a raw-dict print.
+        2. Overall ``check_result`` rejection — descriptive message; there is no
+           documented API error code on this path.
+        3. Per-device rejection (``dev_result_list[0]["code"] != "1"``) — raise the
+           targeted :class:`DeviceNotWritableError` so consumers can silently skip a
+           device that doesn't accept the write instead of retrying blindly (#63).
+        """
+        result_code = data.get("result_code")
+        if result_code is not None and result_code != "1":
+            raise PySolarCloudException.from_response(data)
+        result_data = data.get("result_data") or {}
+        if result_code is None:
+            raise PySolarCloudException(
+                f"Could not {action} parameters of device {device_uuid}: missing result_code ({data})"
+            )
+        if result_data.get("check_result") != "1":
+            raise PySolarCloudException(
+                f"Could not {action} parameters of device {device_uuid}: "
+                f"check_result={result_data.get('check_result')!r} ({data})"
+            )
+        dev_list = result_data.get("dev_result_list") or []
+        if not dev_list:
+            raise PySolarCloudException(
+                f"Could not {action} parameters of device {device_uuid}: response missing dev_result_list ({data})"
+            )
+        device_code = str(dev_list[0].get("code"))
+        if device_code != _DEVICE_TASK_ACCEPTED:
+            _LOGGER.debug("paramSetting rejected by device %s (code=%s) on %s", device_uuid, device_code, action)
+            raise DeviceNotWritableError(data, device_code=device_code)
 
     async def wait_for_task(self, device_uuid: str, task_id: str, *, timeout: float = _EXPIRE_SECONDS) -> dict:
         """Poll for the task to be completed.
@@ -71,6 +122,11 @@ class Control:
                 return data["result_data"]["param_list"]
             else:
                 _LOGGER.error("Task not successful %s: %s", task_id, data)
+                # Envelope-level failure gets typed classification (#64); a "success"
+                # envelope with a bad command_status stays as the base exception with
+                # a descriptive message.
+                if data.get("result_code") != "1":
+                    raise PySolarCloudException.from_response(data)
                 raise PySolarCloudException(f"Task not succesful {task_id}: {data}")
 
     async def async_read_parameters(
@@ -96,15 +152,10 @@ class Control:
         res.raise_for_status()
         data = await res.json()
         _LOGGER.debug("async_read_parameters: %s", data)
-        if (
-            data.get("result_code") == "1"
-            and data["result_data"]["check_result"] == "1"
-            and data["result_data"]["dev_result_list"][0]["code"] == "1"
-        ):
-            task_id = data["result_data"]["dev_result_list"][0]["task_id"]
-            results = await self.wait_for_task(device_uuid, task_id)
-            return [self._format_param_readout(param, param["return_value"]) for param in results]
-        raise PySolarCloudException(f"Could not read parameters from device {device_uuid}: {data}")
+        self._raise_for_param_response(device_uuid, data, action="read")
+        task_id = data["result_data"]["dev_result_list"][0]["task_id"]
+        results = await self.wait_for_task(device_uuid, task_id)
+        return [self._format_param_readout(param, param["return_value"]) for param in results]
 
     @classmethod
     def _param_code_map(cls) -> dict[str, str]:
@@ -137,15 +188,10 @@ class Control:
         res.raise_for_status()
         data = await res.json()
         _LOGGER.debug("async_update_parameters: %s", data)
-        if (
-            data.get("result_code") == "1"
-            and data["result_data"]["check_result"] == "1"
-            and data["result_data"]["dev_result_list"][0]["code"] == "1"
-        ):
-            task_id = data["result_data"]["dev_result_list"][0]["task_id"]
-            results = await self.wait_for_task(device_uuid, task_id)
-            return [self._format_param_readout(param, param["set_value"]) for param in results]
-        raise PySolarCloudException(f"Could not update parameters of device {device_uuid}: {data}")
+        self._raise_for_param_response(device_uuid, data, action="update")
+        task_id = data["result_data"]["dev_result_list"][0]["task_id"]
+        results = await self.wait_for_task(device_uuid, task_id)
+        return [self._format_param_readout(param, param["set_value"]) for param in results]
 
     async def async_heartbeat(self, device_uuid: str, interval_seconds: int) -> None:
         """Send a single External EMS heartbeat (param 10017) and return.
