@@ -144,7 +144,6 @@ async def test_business_method_auth_error_caught_by_base(auth, plants):
         await plants.async_get_plants()
 
 
-
 # --------------------------------------------------------------------------- #
 # RateLimitError.retry_after (#61)
 # --------------------------------------------------------------------------- #
@@ -188,7 +187,6 @@ def test_rate_limit_error_direct_string_construction_has_no_retry_after():
     exc = RateLimitError("throttled")
     assert exc.retry_after is None
     assert exc.error == "throttled"
-
 
 
 # --------------------------------------------------------------------------- #

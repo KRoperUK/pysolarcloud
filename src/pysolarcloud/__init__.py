@@ -416,7 +416,28 @@ class DeviceNotWritableError(PySolarCloudException):
         self.device_code = device_code
 
 
-# Imported at the end so user_auth can import Server/exceptions from this module without
-# a circular-import failure (the names above are already defined by the time this runs).
-from .user_auth import UserAuth as UserAuth  # noqa: E402
-from .user_control import UserControl as UserControl  # noqa: E402
+# User-account auth (:class:`UserAuth`) and its :class:`UserControl` companion depend on
+# ``cryptography`` (AES/RSA envelope) which is heavy to import. Defer the submodule import
+# until one of these names is actually referenced (PEP 562 ``__getattr__``) so OAuth-only
+# consumers — the vast majority — don't pay the cryptography-import cost at
+# ``import pysolarcloud`` time (#65). ``from pysolarcloud import UserAuth`` still works
+# because Python routes that through ``__getattr__``.
+_LAZY_ATTRS = {"UserAuth", "UserControl"}
+
+
+def __getattr__(name: str):
+    """PEP 562 hook: lazy-import UserAuth / UserControl to avoid eager cryptography load."""
+    if name == "UserAuth":
+        from .user_auth import UserAuth
+
+        return UserAuth
+    if name == "UserControl":
+        from .user_control import UserControl
+
+        return UserControl
+    raise AttributeError(f"module 'pysolarcloud' has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """Include the lazily-loaded names so ``dir(pysolarcloud)`` and IDE completion see them."""
+    return sorted(list(globals().keys()) + list(_LAZY_ATTRS))

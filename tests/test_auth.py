@@ -265,7 +265,6 @@ async def test_async_authorize_raises_when_no_access_token():
     assert auth.tokens is None
 
 
-
 def test_server_web_console_url_covers_every_region():
     """Every :class:`Server` member has a documented public web console URL (#67)."""
     expected = {
@@ -276,7 +275,6 @@ def test_server_web_console_url_covers_every_region():
     }
     for server, url in expected.items():
         assert server.web_console_url == url
-
 
 
 @pytest.mark.asyncio
@@ -306,11 +304,56 @@ async def test_refresh_empty_refresh_token_preserves_previous():
     """An empty-string ``refresh_token`` in the refresh response is treated as absent (#62)."""
     auth = _auth()
     auth.tokens = {"access_token": "old", "refresh_token": "r-original", "expires_at": 0}
-    auth.async_refresh_tokens = AsyncMock(
-        return_value={"access_token": "new", "refresh_token": "", "expires_in": 3600}
-    )
+    auth.async_refresh_tokens = AsyncMock(return_value={"access_token": "new", "refresh_token": "", "expires_in": 3600})
 
     token = await auth.async_get_access_token()
 
     assert token == "new"
     assert auth.tokens["refresh_token"] == "r-original"
+
+
+def test_pysolarcloud_import_does_not_load_cryptography():
+    """``import pysolarcloud`` must not pull in ``cryptography`` for OAuth-only consumers (#65).
+
+    Run the check in a fresh subprocess so it isn't polluted by prior imports the test
+    suite has already made in this interpreter (test_user_auth exercises cryptography).
+    """
+    import subprocess
+    import sys
+
+    script = (
+        "import sys, pysolarcloud;"
+        "assert not any(k.startswith('cryptography') for k in sys.modules), "
+        "'cryptography must not load until UserAuth is referenced'"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
+
+
+def test_pysolarcloud_access_of_user_auth_loads_cryptography():
+    """Referencing ``UserAuth`` triggers the deferred cryptography import (#65)."""
+    import subprocess
+    import sys
+
+    script = (
+        "import sys, pysolarcloud;"
+        "_ = pysolarcloud.UserAuth;"
+        "assert any(k.startswith('cryptography') for k in sys.modules), "
+        "'cryptography must load once UserAuth is referenced'"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
+
+
+def test_pysolarcloud_unknown_attribute_raises_attribute_error():
+    """The lazy loader still surfaces unknown names as ``AttributeError`` (PEP 562)."""
+    import pysolarcloud
+
+    with pytest.raises(AttributeError):
+        _ = pysolarcloud.this_does_not_exist  # type: ignore[attr-defined]
+
+
+def test_pysolarcloud_dir_contains_lazy_names():
+    """``dir(pysolarcloud)`` still lists the lazy names for IDE/repl discovery (#65)."""
+    import pysolarcloud
+
+    names = set(dir(pysolarcloud))
+    assert {"UserAuth", "UserControl"}.issubset(names)
