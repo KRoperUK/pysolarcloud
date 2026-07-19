@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.15.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.14.0...v0.15.0) (2026-07-19)
+
+
+### Features
+
+* **control:** typed ParameterSpec model + Control.PARAMETERS map ([#75](https://github.com/KRoperUK/pysolarcloud/issues/75)) ([e2f6216](https://github.com/KRoperUK/pysolarcloud/commit/e2f6216304a46cab079a6389174c3d7f5cdb1968))
+* library follow-ups: retry_after, partial refresh, DeviceNotWritable, lazy crypto, console URL ([d3b8c2a](https://github.com/KRoperUK/pysolarcloud/commit/d3b8c2ae2e04a2d3b933b02754362772fde5f47b))
+* **plants:** async_iter_historical_data — transparent pagination helper ([#74](https://github.com/KRoperUK/pysolarcloud/issues/74)) ([b06ffe1](https://github.com/KRoperUK/pysolarcloud/commit/b06ffe1ee7cdee5ae35c2c80a1caf3afb95d355e))
+* **server:** expose per-region web console URL from the Server enum ([6a122f2](https://github.com/KRoperUK/pysolarcloud/commit/6a122f2ed29b22924ba9459842b677e20c79b6b5))
+
+
+### Bug Fixes
+
+* **auth:** expose server retry_after hint on RateLimitError ([88f9800](https://github.com/KRoperUK/pysolarcloud/commit/88f9800b09db26c482ebe63f7c2c9fa38d335420))
+* **auth:** preserve refresh_token when partial refresh response omits it ([fab3a1e](https://github.com/KRoperUK/pysolarcloud/commit/fab3a1ea4fdee5d2e04f870ff0d02c994821bfa3))
+* **control:** typed DeviceNotWritableError + centralise envelope routing ([952d933](https://github.com/KRoperUK/pysolarcloud/commit/952d933fd8ad3b20edfa5c4ee87d4ba218bafe7d))
+
+
+### Documentation
+
+* add shields.io badges to README ([#60](https://github.com/KRoperUK/pysolarcloud/issues/60)) ([fbac60a](https://github.com/KRoperUK/pysolarcloud/commit/fbac60ada7a89a39e90ce9c1965bda0e343e4c4a))
+
 ## [0.14.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.13.0...v0.14.0) (2026-07-18)
 
 
