@@ -1,5 +1,6 @@
 """Tests for the Plants extensions added in the KRoperUK fork."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -873,3 +874,177 @@ async def test_realtime_data_chunks_over_100_points(auth, plants):
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# --------------------------------------------------------------------------- #
+# async_iter_historical_data — pagination helper (#68)
+# --------------------------------------------------------------------------- #
+
+
+def _historical_response_factory(rows_per_call: list[list[tuple[str, str]]]) -> Any:
+    """Return a side-effect list for ``auth.request`` yielding one page per call.
+
+    ``rows_per_call[i]`` is a list of ``(timestamp, value)`` pairs to emit as the
+    ``i``-th call's ``result_data["123"]`` payload for point ``83033`` (power).
+    """
+    responses = []
+    for pairs in rows_per_call:
+        responses.append(
+            _mock_response(
+                {
+                    "result_code": "1",
+                    "result_msg": "success",
+                    "result_data": {
+                        "point_dict": [{"point_id": "83033", "point_name": "Power", "point_unit": "W"}],
+                        "123": [{"time_stamp": ts, "p83033": value} for ts, value in pairs],
+                    },
+                }
+            )
+        )
+    return responses
+
+
+@pytest.mark.asyncio
+async def test_iter_historical_data_yields_rows_across_multiple_chunks(auth, plants):
+    """A window larger than the chunk step spans multiple underlying calls; all rows come out (#68)."""
+    from datetime import datetime, timedelta
+
+    # 6-hour window with a 3-hour chunk = exactly 2 calls; two rows in each.
+    auth.request.side_effect = _historical_response_factory(
+        [
+            [("20240101000000", "1000"), ("20240101010000", "1100")],
+            [("20240101030000", "1200"), ("20240101040000", "1300")],
+        ]
+    )
+
+    rows = [
+        row
+        async for row in plants.async_iter_historical_data(
+            "123",
+            datetime(2024, 1, 1, 0, 0, 0),
+            datetime(2024, 1, 1, 6, 0, 0),
+            chunk_window=timedelta(hours=3),
+        )
+    ]
+
+    assert [row["value"] for row in rows] == [1000.0, 1100.0, 1200.0, 1300.0]
+    assert auth.request.await_count == 2
+    # Check the two calls carry the expected consecutive [start, end) slices.
+    call_windows = [
+        (call.args[1]["start_time_stamp"], call.args[1]["end_time_stamp"]) for call in auth.request.await_args_list
+    ]
+    assert call_windows == [
+        ("20240101000000", "20240101030000"),
+        ("20240101030000", "20240101060000"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_iter_historical_data_single_chunk(auth, plants):
+    """A window smaller than the chunk step fits in one call — no pagination overhead (#68)."""
+    from datetime import datetime, timedelta
+
+    auth.request.side_effect = _historical_response_factory([[("20240101000000", "500"), ("20240101003000", "550")]])
+
+    rows = [
+        row
+        async for row in plants.async_iter_historical_data(
+            "123",
+            datetime(2024, 1, 1, 0, 0, 0),
+            datetime(2024, 1, 1, 1, 0, 0),
+            chunk_window=timedelta(hours=3),
+        )
+    ]
+
+    assert len(rows) == 2
+    assert auth.request.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_iter_historical_data_empty_window_yields_nothing(auth, plants):
+    """When ``end_time <= start_time`` the generator emits nothing and issues no calls (#68)."""
+    from datetime import datetime
+
+    rows = [
+        row
+        async for row in plants.async_iter_historical_data(
+            "123",
+            datetime(2024, 1, 1, 5, 0, 0),
+            datetime(2024, 1, 1, 5, 0, 0),  # equal → empty window
+        )
+    ]
+
+    assert rows == []
+    assert auth.request.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_iter_historical_data_rejects_non_positive_chunk_window(auth, plants):
+    """A zero or negative ``chunk_window`` raises ``ValueError`` rather than spinning (#68)."""
+    from datetime import datetime, timedelta
+
+    with pytest.raises(ValueError, match="positive"):
+        # Consume the generator to trigger the guard.
+        async for _ in plants.async_iter_historical_data(
+            "123",
+            datetime(2024, 1, 1, 0, 0, 0),
+            datetime(2024, 1, 1, 1, 0, 0),
+            chunk_window=timedelta(0),
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_iter_historical_data_forwards_measure_points_and_interval(auth, plants):
+    """``measure_points`` and ``interval`` flow through to the underlying API call (#68)."""
+    from datetime import datetime, timedelta
+
+    auth.request.side_effect = _historical_response_factory([[("20240101000000", "42")]])
+
+    _ = [
+        row
+        async for row in plants.async_iter_historical_data(
+            "123",
+            datetime(2024, 1, 1, 0, 0, 0),
+            datetime(2024, 1, 1, 1, 0, 0),
+            measure_points=["power"],
+            interval=timedelta(minutes=5),
+        )
+    ]
+
+    body = auth.request.await_args_list[0].args[1]
+    assert body["minute_interval"] == "5"
+    # ``power`` is the named alias for point 83033; the request body carries the numeric ID.
+    assert "p83033" in body["points"]
+
+
+@pytest.mark.asyncio
+async def test_iter_historical_data_uneven_final_chunk(auth, plants):
+    """The last chunk is truncated to end at exactly ``end_time`` — no overshoot (#68)."""
+    from datetime import datetime, timedelta
+
+    # 4-hour window with 3-hour chunk → first chunk 0-3h, final chunk 3-4h.
+    auth.request.side_effect = _historical_response_factory(
+        [
+            [("20240101000000", "1")],
+            [("20240101030000", "2")],
+        ]
+    )
+
+    _ = [
+        row
+        async for row in plants.async_iter_historical_data(
+            "123",
+            datetime(2024, 1, 1, 0, 0, 0),
+            datetime(2024, 1, 1, 4, 0, 0),
+            chunk_window=timedelta(hours=3),
+        )
+    ]
+
+    call_windows = [
+        (call.args[1]["start_time_stamp"], call.args[1]["end_time_stamp"]) for call in auth.request.await_args_list
+    ]
+    assert call_windows == [
+        ("20240101000000", "20240101030000"),
+        ("20240101030000", "20240101040000"),
+    ]
