@@ -7,13 +7,17 @@ authors = [
 ]
 description = "A library to interact with Sungrow's iSolarCloud API (KRoperUK fork with battery, EV charger and dispatch extensions)"
 readme = "README.md"
-# The code relies on 3.12 Enum semantics (`value in EnumClass` membership tests),
-# and the only consumer (Home Assistant) requires 3.13, so 3.12 is the floor.
+# The code relies on 3.12 Enum semantics (`value in EnumClass` membership tests), so
+# 3.12 is the floor. Deliberately kept below the only consumer's floor: Home Assistant
+# requires >=3.14 (as of HA 2026.3), but staying at 3.12 keeps the library usable
+# standalone and on older HA releases. CI tests every supported version plus 3.14, the
+# version the consuming integration actually runs on.
 requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
     "Framework :: AsyncIO",
     "Topic :: Home Automation",
