@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/KRoperUK/pysolarcloud/compare/v0.15.0...v0.15.1) (2026-09-12)
+
+
+### Bug Fixes
+
+* **auth:** map the India region to web3.isolarcloud.in with cloudId=9 ([#80](https://github.com/KRoperUK/pysolarcloud/issues/80)) ([0a1c440](https://github.com/KRoperUK/pysolarcloud/commit/0a1c440565c2b8009ff3113b948ff2508dbf54a7))
+
 ## [0.15.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.14.0...v0.15.0) (2026-07-19)
 
 
