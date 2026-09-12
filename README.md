@@ -153,6 +153,10 @@ async with UserAuth(Server.Europe, "you@example.com", "password") as auth:
 > (see `NOTICE`). Credentials are only sent to iSolarCloud over TLS and are never logged.
 
 # Contributions
-Ideas or contributions are welcome. I am not afiliated with Sungrow, I'm just another user of the API. My main use case will be a HomeAssistant integration based on this package.
+Ideas or contributions are welcome. I am not affiliated with Sungrow, I'm just another user of the API. My main use case will be a HomeAssistant integration based on this package.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, the checks CI runs, and the
+rules that `main` enforces — notably that **commits must be signed** and that pull requests
+need the branch up to date with `main`.
 
 Enjoy!
