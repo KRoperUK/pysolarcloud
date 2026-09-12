@@ -20,6 +20,7 @@ class Server(StrEnum):
     International = "https://gateway.isolarcloud.com.hk"
     Europe = "https://gateway.isolarcloud.eu"
     Australia = "https://augateway.isolarcloud.com"
+    India = "https://gateway.isolarcloud.in"
 
     @property
     def web_console_url(self) -> str:
@@ -38,7 +39,9 @@ class Server(StrEnum):
                 return "https://web3.isolarcloud.eu"
             case Server.Australia:
                 return "https://auweb3.isolarcloud.com"
-        # StrEnum with the four cases above is exhaustive at runtime, but keep the
+            case Server.India:
+                return "https://web3.isolarcloud.in"
+        # StrEnum with the five cases above is exhaustive at runtime, but keep the
         # explicit fallback so a future member can't return None by accident.
         raise ValueError(f"No web console URL configured for {self!r}")
 
@@ -80,6 +83,13 @@ class AbstractAuth(ABC):
             case Server.Australia.value:
                 auth_server = "auweb3.isolarcloud.com"
                 cloud_id = 7
+            case Server.India.value:
+                # cloudId=9 is the India region. Sending the International cloudId (2)
+                # here makes web3.isolarcloud.in's frontend redirect the browser to
+                # web3.isolarcloud.com.hk, where an India-registered App ID shows
+                # "No data"; omitting cloudId falls back to China (KRoperUK/sungrow-hass#404).
+                auth_server = "web3.isolarcloud.in"
+                cloud_id = 9
             case _:
                 raise ValueError(f"Unknown iSolarCloud server host: {self.host}")
         return f"https://{auth_server}/#/authorized-app?cloudId={cloud_id}&applicationId={self.app_id}&redirectUrl={quote_plus(redirect_uri)}"

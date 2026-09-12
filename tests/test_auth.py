@@ -177,6 +177,28 @@ def test_auth_url_china_and_australia_regions():
     assert "cloudId=2" in intl_url
 
 
+def test_auth_url_india_region_uses_cloud_id_9():
+    """India maps to web3.isolarcloud.in with cloudId=9 (#404).
+
+    Sending the International cloudId (2) to the India host makes its frontend redirect
+    to web3.isolarcloud.com.hk, where an India App ID shows "No data" — so this pins both
+    the host and the ID.
+    """
+    india = Auth(host=Server.India, appkey="k", access_key="s", app_id="9", websession=MagicMock())
+    url = india.auth_url("https://cb")
+    assert url.startswith("https://web3.isolarcloud.in/#/authorized-app")
+    assert "cloudId=9" in url
+    assert "cloudId=2" not in url
+
+
+def test_auth_url_india_gateway_string_host():
+    """The integration passes the gateway URL as a plain string; India must resolve too."""
+    india = Auth(host="https://gateway.isolarcloud.in", appkey="k", access_key="s", app_id="9", websession=MagicMock())
+    url = india.auth_url("https://cb")
+    assert url.startswith("https://web3.isolarcloud.in/#/authorized-app")
+    assert "cloudId=9" in url
+
+
 def test_auth_url_unknown_server_raises():
     """An unrecognised server host raises ValueError."""
     auth = Auth(host="https://unknown.example.com", appkey="k", access_key="s", app_id="9", websession=MagicMock())
@@ -272,9 +294,12 @@ def test_server_web_console_url_covers_every_region():
         Server.International: "https://web3.isolarcloud.com.hk",
         Server.Europe: "https://web3.isolarcloud.eu",
         Server.Australia: "https://auweb3.isolarcloud.com",
+        Server.India: "https://web3.isolarcloud.in",
     }
     for server, url in expected.items():
         assert server.web_console_url == url
+    # Guard against a new member being added without a console URL / auth_url case.
+    assert set(expected) == set(Server)
 
 
 @pytest.mark.asyncio
