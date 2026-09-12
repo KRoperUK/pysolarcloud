@@ -25,23 +25,28 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: .github/workflows/test.yml
+          cache-dependency-path: |
+            pyproject.toml
+            setup.py
 
-      - name: Install ruff
-        # Kept in sync with the sungrow-hass integration and the [dev] extra (#38) so
-        # lint/format can't drift between the two repos that share code conventions.
-        run: pip install ruff==0.15.21
+      - name: Install dependencies
+        # Lint tooling comes from the [dev] extra in setup.py so its pins live in exactly
+        # ONE place. Duplicating them here previously let the workflow drift a release
+        # behind the extra (and behind the sungrow-hass integration, which shares these
+        # conventions). Dependabot updates the [dev] pins (#38).
+        #
+        # Installing the extra also puts aiohttp/cryptography in the environment, so mypy
+        # checks against real stubs instead of silently skipping them via
+        # ``ignore_missing_imports``.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
 
       - name: Lint with ruff
         run: ruff check src/ tests/
 
       - name: Check formatting
         run: ruff format --check src/ tests/
-
-      - name: Install mypy
-        # Pinned for reproducible type checks (a new mypy release can't change results
-        # without a deliberate bump). Matches the sungrow-hass pin (#38).
-        run: pip install mypy==2.2.0
 
       - name: Type check with mypy
         run: mypy
