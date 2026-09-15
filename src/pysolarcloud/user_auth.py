@@ -73,6 +73,15 @@ _DEVICE_LIST_PATH = "/v1/devService/queryDeviceList"
 _DEVICE_REALTIME_PATH = "/v1/devService/queryDevice"
 _HISTORICAL_DATA_PATH = "/v1/commonService/queryMutiPointDataList"
 
+# Battery capacity & SoC read paths (#94). ``getBatteryCapacityByPsIdV2``,
+# ``querySocByPsId`` and ``querySocBySn`` live under ``/v1/devService/`` and take the
+# ``ps_id`` / ``bt_sn`` params of the app builders; ``getPsBatteryInfo`` lives under
+# ``/v1/powerStationService/`` and additionally takes ``query_type`` + ``date_id``.
+_BATTERY_CAPACITY_PATH = "/v1/devService/getBatteryCapacityByPsIdV2"
+_BATTERY_INFO_PATH = "/v1/powerStationService/getPsBatteryInfo"
+_SOC_BY_PS_ID_PATH = "/v1/devService/querySocByPsId"
+_SOC_BY_SN_PATH = "/v1/devService/querySocBySn"
+
 # Documented result codes meaning the session/login is invalid → re-login (Appendix 2).
 _LOGIN_INVALID_CODES = frozenset({"E00003", "1"})
 
@@ -360,3 +369,67 @@ class UserAuth:
             if isinstance(series, list):
                 return series
         return []
+
+    # --- Battery capacity & SoC reads (#94) ---------------------------------
+    #
+    # Read-only helpers exposing the app's real battery nameplate capacity and SoC, so
+    # consumers can size charge/discharge power ceilings per device instead of a static
+    # cap. Verified against the app's ``HttpRequest.java`` builders.
+
+    async def async_get_battery_capacity(self, ps_id: str | int) -> dict[str, Any]:
+        """Return real battery nameplate capacity for a plant (``getBatteryCapacityByPsIdV2``, #94).
+
+        Sends ``ps_id``. Returns the raw ``result_data`` dict (nameplate/usable capacity;
+        the exact fields are model/region-dependent).
+        """
+        data = await self.async_request(_BATTERY_CAPACITY_PATH, {"ps_id": str(ps_id)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_battery_info(
+        self,
+        ps_id: str | int,
+        *,
+        query_type: str | int | None = None,
+        date_id: str | None = None,
+        minute_interval: str | int | None = None,
+    ) -> dict[str, Any]:
+        """Return the plant battery info block (``getPsBatteryInfo``, #94).
+
+        Sends ``ps_id`` and, when provided, ``query_type``, ``date_id`` and
+        ``minute_interval``. Returns the raw ``result_data`` dict.
+
+        .. note::
+            The app's ``getPsBatteryInfo`` builder always sends ``query_type`` and
+            ``date_id`` alongside ``ps_id`` (with an optional ``minute_interval``). The
+            **parameter names** are verified against the app, but their accepted **values**
+            (which ``query_type`` selects which block; the ``date_id`` format) are
+            **unverified against a live device**, so they are left to the caller and only
+            included when supplied.
+        """
+        body: dict[str, Any] = {"ps_id": str(ps_id)}
+        if query_type is not None:
+            body["query_type"] = str(query_type)
+        if date_id is not None:
+            body["date_id"] = str(date_id)
+        if minute_interval is not None:
+            body["minute_interval"] = str(minute_interval)
+        data = await self.async_request(_BATTERY_INFO_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_get_soc_by_ps_id(self, ps_id: str | int) -> dict[str, Any]:
+        """Return battery SoC for a plant (``querySocByPsId``, #94).
+
+        Sends ``ps_id``. Returns the raw ``result_data`` dict (state of charge; the exact
+        fields are model/region-dependent).
+        """
+        data = await self.async_request(_SOC_BY_PS_ID_PATH, {"ps_id": str(ps_id)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_soc_by_sn(self, bt_sn: str) -> dict[str, Any]:
+        """Return battery SoC for a specific battery serial (``querySocBySn``, #94).
+
+        Sends ``bt_sn`` (the app's battery-serial parameter name). Returns the raw
+        ``result_data`` dict.
+        """
+        data = await self.async_request(_SOC_BY_SN_PATH, {"bt_sn": str(bt_sn)})
+        return dict(data.get("result_data") or {})
