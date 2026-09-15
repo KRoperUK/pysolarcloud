@@ -429,6 +429,31 @@ class DeviceNotWritableError(PySolarCloudException):
         self.device_code = device_code
 
 
+class DeviceEndpointUnavailable(PySolarCloudException):
+    """Raised when a per-device endpoint is not available for this account or region.
+
+    Some iSolarCloud accounts/regions do not expose the per-device realtime endpoint at
+    all (HTTP 404/405, or ``result_code`` ``E994``/``E996``). That is a permanent,
+    per-account capability difference rather than a transient failure, so it is raised
+    as a typed error instead of being flattened into an empty result.
+
+    Callers can therefore tell the three outcomes of
+    :meth:`~pysolarcloud.plants.Plants.async_get_device_realtime` apart: *unavailable*
+    (this exception), *available but no points* (an empty dict), and *data* (#86).
+    """
+
+    def __init__(self, response: dict[str, Any] | str | None = None) -> None:
+        super().__init__(
+            {
+                "error": "device_endpoint_unavailable",
+                "error_description": "The per-device endpoint is not available for this account",
+            }
+        )
+        #: The raw API response (or a synthetic ``{"result_code": ...}``) that signalled
+        #: the missing endpoint, kept for diagnostics.
+        self.response = response
+
+
 # Typed dispatch-parameter metadata (#71). Re-exported at package top level so
 # consumers building UI on top of the library (sungrow-hass) can do
 # ``from pysolarcloud import PARAMETERS, ParameterSpec`` without reaching into the

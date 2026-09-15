@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
-from . import _LOGGER, AbstractAuth, PySolarCloudException
+from . import _LOGGER, AbstractAuth, DeviceEndpointUnavailable, PySolarCloudException
 
 if TYPE_CHECKING:
     # Type-only import: ``UserAuth`` pulls in ``cryptography`` (heavy) and is lazily
@@ -238,8 +238,11 @@ class Plants:
 
         The iSolarCloud plant realtime endpoint aggregates all points at the plant level and does
         not separate per-device data for chargers, batteries, etc. Some accounts / regions expose
-        a per-device endpoint; when it is not available, this method returns an empty dict rather
-        than raising, so callers can feature-detect gracefully.
+        a per-device endpoint; when they do not, this method raises
+        :class:`~pysolarcloud.DeviceEndpointUnavailable`, so a permanent capability gap is never
+        mistaken for a quiet device. An empty dict means "the endpoint is available but this
+        device type currently reports no points" (#86). Use
+        :meth:`async_device_realtime_supported` to probe that once per session.
 
         ``getDeviceRealTimeData`` keys its result per device and requires the specific devices to
         query: ``ps_key_list`` (or ``sn_list``) must be supplied or the API rejects the call with
@@ -276,13 +279,49 @@ class Plants:
         # whole call fail. Fall back to the plant points only for feature-detection when
         # no explicit points are given.
         effective_points = dict(extra_measure_points) if extra_measure_points else dict(self.measure_points)
-        out = await self._async_get_device_realtime_openapi(plant_id, type_id, ps_key_list, effective_points)
+        try:
+            out = await self._async_get_device_realtime_openapi(plant_id, type_id, ps_key_list, effective_points)
+        except DeviceEndpointUnavailable:
+            # The account/region has no OpenAPI per-device endpoint at all. A user-account
+            # session can still serve the request; without one, surface the capability gap
+            # rather than masking it as "no data" (#86).
+            if user_auth is None:
+                raise
+            out = {}
         # Only reach for the user-account fallback when the OpenAPI path produced nothing
         # useful AND the caller opted in by supplying a session. When it returned data, or
         # no user_auth was given, behaviour is exactly as before.
         if out or user_auth is None:
             return out
         return await self._async_get_device_realtime_user_fallback(ps_key_list, user_auth, effective_points)
+
+    async def async_device_realtime_supported(
+        self,
+        plant_id: str,
+        device_type: DeviceType | int | str,
+        *,
+        ps_key_list: list[str] | None = None,
+        user_auth: "UserAuth | None" = None,
+    ) -> bool:
+        """Return whether a per-device realtime fetch is usable for this device type.
+
+        A one-shot capability probe for callers that feature-detect once per session rather
+        than re-deriving it from an empty result on every poll. Returns ``False`` when the
+        per-device endpoint is unavailable for the account
+        (:class:`~pysolarcloud.DeviceEndpointUnavailable`), and ``True`` otherwise —
+        including when the endpoint is available but this device type currently has no
+        points, which is a legitimate empty result and not a missing feature.
+
+        Other errors (auth, rate limit, transport) propagate, so a caller can tell a
+        capability gap apart from a transient failure. ``user_auth`` behaves as in
+        :meth:`async_get_device_realtime` — it is consulted as a fallback, so the probe can
+        return ``True`` on the strength of the user-account path alone.
+        """
+        try:
+            await self.async_get_device_realtime(plant_id, device_type, ps_key_list=ps_key_list, user_auth=user_auth)
+        except DeviceEndpointUnavailable:
+            return False
+        return True
 
     async def _async_get_device_realtime_openapi(
         self,
@@ -294,8 +333,10 @@ class Plants:
         """Developer-OAuth ``getDeviceRealTimeData`` fetch (the original code path).
 
         Returns the ``{uuid: {code: {...}}}`` structure, or an empty dict when the endpoint is
-        unavailable for this account (HTTP 404/405 or ``result_code`` ``E994``/``E996``). Only the
-        "endpoint missing" class of failure is swallowed; other errors still raise.
+        available but this device type has no points. Raises
+        :class:`~pysolarcloud.DeviceEndpointUnavailable` when the account/region does not expose
+        the endpoint at all (HTTP 404/405 or ``result_code`` ``E994``/``E996``); any other error
+        still raises its usual exception.
         """
         uri = "/openapi/platform/getDeviceRealTimeData"
         # getDeviceRealTimeData caps point_id_list at 100 (result_code 010); a hybrid
@@ -318,12 +359,14 @@ class Plants:
             # "endpoint missing" class of failure, not generic 4xx/5xx.
             if res.status in (404, 405):
                 _LOGGER.debug("Device realtime endpoint unavailable for plant %s type %s", plant_id, type_id)
-                return {}
+                raise DeviceEndpointUnavailable(
+                    {"result_code": str(res.status), "result_msg": "Device realtime endpoint unavailable"}
+                )
             res = await res.json()
             if res.get("result_code") != "1":
                 if res.get("result_code") in _DEVICE_ENDPOINT_MISSING_CODES:
                     _LOGGER.debug("Device realtime endpoint rejected request: %s", res)
-                    return {}
+                    raise DeviceEndpointUnavailable(res)
                 _LOGGER.error("Error response from %s: %s", uri, res)
                 raise PySolarCloudException.from_response(res)
             point_dict_items = res.get("result_data", {}).get("point_dict", []) or []

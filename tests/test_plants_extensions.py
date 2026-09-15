@@ -160,27 +160,30 @@ async def test_device_realtime_requests_only_the_given_points(auth, plants):
 
 
 @pytest.mark.asyncio
-async def test_device_realtime_gracefully_degrades_on_404(auth, plants):
-    """Device realtime endpoint returns {} when the upstream endpoint is absent."""
+async def test_device_realtime_raises_when_endpoint_absent_on_404(auth, plants):
+    """A 404 means the account has no per-device endpoint: raise, don't return {} (#86)."""
+    from pysolarcloud import DeviceEndpointUnavailable
+
     auth.request.return_value = _mock_response(
         {"result_code": "E996", "result_msg": "api not found", "result_data": None}, status=404
     )
 
-    data = await plants.async_get_device_realtime("123", 7, ps_key_list=["dev-1"])
-
-    assert data == {}
+    with pytest.raises(DeviceEndpointUnavailable):
+        await plants.async_get_device_realtime("123", 7, ps_key_list=["dev-1"])
 
 
 @pytest.mark.asyncio
-async def test_device_realtime_swallows_known_api_errors(auth, plants):
-    """Known soft errors from the device endpoint are treated as "unsupported"."""
+@pytest.mark.parametrize("code", ["E994", "E996"])
+async def test_device_realtime_raises_on_endpoint_missing_code(auth, plants, code):
+    """The documented "endpoint unavailable" result codes raise a typed error (#86)."""
+    from pysolarcloud import DeviceEndpointUnavailable
+
     auth.request.return_value = _mock_response(
-        {"result_code": "E996", "result_msg": "api not found", "result_data": None}
+        {"result_code": code, "result_msg": "api not found", "result_data": None}
     )
 
-    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"])
-
-    assert data == {}
+    with pytest.raises(DeviceEndpointUnavailable):
+        await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"])
 
 
 @pytest.mark.asyncio
@@ -1169,3 +1172,96 @@ async def test_device_realtime_fallback_unknown_point_id_keeps_numeric_code(auth
     data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"], user_auth=user_auth)
 
     assert data == {"dev-1": {"99999": {"id": "99999", "value": 42.0, "unit": "W", "name": "Mystery", "code": "99999"}}}
+
+
+# --------------------------------------------------------------------------- #
+# async_get_device_realtime — unavailable vs no-data, and the capability probe (#86)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_empty_when_available_with_no_points(auth, plants):
+    """Available endpoint + no points for this device type -> {} (not an error) (#86)."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": [], "device_point_list": []}}
+    )
+
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"])
+
+    assert data == {}
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_no_devices_is_empty_not_unavailable(auth, plants):
+    """No devices of the requested type -> {} without even calling the API (#86)."""
+    plants.async_get_plant_devices = AsyncMock(return_value=[])
+
+    data = await plants.async_get_device_realtime("123", DeviceType.METER)
+
+    assert data == {}
+    auth.request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_supported_true_when_data(auth, plants):
+    """The probe reports True when the endpoint answers with data (#86)."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {
+                "point_dict": [{"point_id": "11111", "point_name": "EV Power", "point_unit": "W"}],
+                "device_point_list": [{"uuid": "dev-1", "p11111": "7000"}],
+            },
+        }
+    )
+
+    assert await plants.async_device_realtime_supported("123", DeviceType.METER, ps_key_list=["dev-1"]) is True
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_supported_true_when_available_but_empty(auth, plants):
+    """An empty result is "supported, no points yet" — the probe still reports True (#86)."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": [], "device_point_list": []}}
+    )
+
+    assert await plants.async_device_realtime_supported("123", DeviceType.METER, ps_key_list=["dev-1"]) is True
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_supported_false_when_endpoint_absent(auth, plants):
+    """The probe reports False — and does not raise — when the account lacks the endpoint (#86)."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "E996", "result_msg": "api not found", "result_data": None}, status=404
+    )
+
+    assert await plants.async_device_realtime_supported("123", DeviceType.METER, ps_key_list=["dev-1"]) is False
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_supported_true_via_user_fallback(auth, plants):
+    """With a user_auth fallback the probe is True even when OpenAPI lacks the endpoint (#86)."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "E996", "result_msg": "api not found", "result_data": None}, status=404
+    )
+    user_auth = _mock_user_auth({"dev-1": {"83033": {"id": "83033", "value": 3000.0, "unit": "W", "name": "Power"}}})
+
+    supported = await plants.async_device_realtime_supported(
+        "123", DeviceType.METER, ps_key_list=["dev-1"], user_auth=user_auth
+    )
+
+    assert supported is True
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_supported_propagates_real_errors(auth, plants):
+    """The probe only swallows the capability signal — a genuine error still raises (#86)."""
+    from pysolarcloud import PySolarCloudException
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "E00003", "result_msg": "The token is invalid or has expired", "result_data": None}
+    )
+
+    with pytest.raises(PySolarCloudException):
+        await plants.async_device_realtime_supported("123", DeviceType.METER, ps_key_list=["dev-1"])
