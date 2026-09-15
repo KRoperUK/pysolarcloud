@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.17.0...v0.18.0) (2026-09-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* `async_get_device_realtime` now raises `DeviceEndpointUnavailable` instead of returning `{}` when the per-device endpoint is unavailable and no `user_auth` fallback is supplied. Callers that want the old behaviour can catch the exception, or call `async_device_realtime_supported` first.
+
+### Features
+
+* app-native scheduling & home operation-mode endpoints in UserAuth ([#95](https://github.com/KRoperUK/pysolarcloud/issues/95)) ([#105](https://github.com/KRoperUK/pysolarcloud/issues/105)) ([581d3d6](https://github.com/KRoperUK/pysolarcloud/commit/581d3d6f0c8712aa710182712e5134047841875e))
+* raise DeviceEndpointUnavailable when the per-device endpoint is absent ([#86](https://github.com/KRoperUK/pysolarcloud/issues/86)) ([#103](https://github.com/KRoperUK/pysolarcloud/issues/103)) ([6f0c427](https://github.com/KRoperUK/pysolarcloud/commit/6f0c427443ff73836909d82c87290d0043ef502e))
+
 ## [0.17.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.16.0...v0.17.0) (2026-09-15)
 
 
