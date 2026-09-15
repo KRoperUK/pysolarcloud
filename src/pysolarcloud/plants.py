@@ -1,9 +1,16 @@
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from . import _LOGGER, AbstractAuth, PySolarCloudException
+
+if TYPE_CHECKING:
+    # Type-only import: ``UserAuth`` pulls in ``cryptography`` (heavy) and is lazily
+    # imported at package level (PEP 562 ``__getattr__`` in ``__init__``). Importing it
+    # only under ``TYPE_CHECKING`` keeps ``import pysolarcloud`` cheap for OAuth-only
+    # consumers while still giving the optional ``user_auth`` fallback a real type.
+    from .user_auth import UserAuth
 
 # iSolarCloud's ``getPowerStationPointMinuteDataList`` accepts arbitrary
 # ``start_time_stamp`` / ``end_time_stamp`` values, but wide windows (> a few
@@ -225,6 +232,7 @@ class Plants:
         *,
         ps_key_list: list[str] | None = None,
         extra_measure_points: dict[str, str] | None = None,
+        user_auth: "UserAuth | None" = None,
     ) -> dict[str, Any]:
         """Best-effort device-level realtime fetch for non-inverter devices.
 
@@ -239,6 +247,17 @@ class Plants:
         ``ps_key_list`` (each device's ``ps_key`` from :meth:`async_get_plant_devices`) to avoid an
         extra lookup; when it is omitted, the matching devices are discovered here. If no
         dispatchable device of ``device_type`` exists, an empty dict is returned.
+
+        ``user_auth`` optionally supplies a :class:`~pysolarcloud.user_auth.UserAuth` session to
+        use as a fallback. When the developer-OAuth ``getDeviceRealTimeData`` path yields nothing
+        useful — an empty result or the documented "endpoint unavailable" outcome (HTTP 404/405,
+        ``result_code`` ``E994``/``E996``) — and a ``user_auth`` is given, the equivalent
+        user-account per-device call (:meth:`UserAuth.async_get_device_realtime`, keyed by the same
+        ``ps_key`` values) is tried and its results are re-keyed to the same
+        ``{uuid: {code: {...}}}`` shape so a caller cannot tell which source produced the data. The
+        fallback is best-effort: if it also fails or returns nothing, an empty dict is returned and
+        no exception is raised. The default (``None``) leaves behaviour exactly as it was — no user
+        API is ever contacted.
 
         Returns a dict keyed by device uuid, each value being the same measure-point structure as
         :meth:`async_get_realtime_data`.
@@ -257,6 +276,27 @@ class Plants:
         # whole call fail. Fall back to the plant points only for feature-detection when
         # no explicit points are given.
         effective_points = dict(extra_measure_points) if extra_measure_points else dict(self.measure_points)
+        out = await self._async_get_device_realtime_openapi(plant_id, type_id, ps_key_list, effective_points)
+        # Only reach for the user-account fallback when the OpenAPI path produced nothing
+        # useful AND the caller opted in by supplying a session. When it returned data, or
+        # no user_auth was given, behaviour is exactly as before.
+        if out or user_auth is None:
+            return out
+        return await self._async_get_device_realtime_user_fallback(ps_key_list, user_auth, effective_points)
+
+    async def _async_get_device_realtime_openapi(
+        self,
+        plant_id: str,
+        type_id: int,
+        ps_key_list: list[str],
+        effective_points: dict[str, str],
+    ) -> dict[str, Any]:
+        """Developer-OAuth ``getDeviceRealTimeData`` fetch (the original code path).
+
+        Returns the ``{uuid: {code: {...}}}`` structure, or an empty dict when the endpoint is
+        unavailable for this account (HTTP 404/405 or ``result_code`` ``E994``/``E996``). Only the
+        "endpoint missing" class of failure is swallowed; other errors still raise.
+        """
         uri = "/openapi/platform/getDeviceRealTimeData"
         # getDeviceRealTimeData caps point_id_list at 100 (result_code 010); a hybrid
         # inverter's diagnostic set plus user extras can exceed that, so request the
@@ -304,6 +344,40 @@ class Plants:
                     if k[0] == "p" and k[1:].isdigit()
                 ]
                 out.setdefault(uuid, {}).update({d["code"]: d for d in data})
+        return out
+
+    async def _async_get_device_realtime_user_fallback(
+        self,
+        ps_key_list: list[str],
+        user_auth: "UserAuth",
+        effective_points: dict[str, str],
+    ) -> dict[str, Any]:
+        """Re-key the user-account per-device realtime call into the OpenAPI shape.
+
+        Calls :meth:`UserAuth.async_get_device_realtime` for the same ``ps_key`` values and maps
+        its ``{uuid: {point_id: {id, value, unit, name}}}`` result onto the OpenAPI
+        ``{uuid: {code: {id, code, value, unit, name}}}`` shape, resolving each numeric ``point_id``
+        to its human ``code`` via ``effective_points`` (unknown IDs fall back to the numeric id,
+        exactly like the OpenAPI path). Best-effort: any failure — a rejected login, an API error,
+        a transport error — is swallowed and an empty dict returned, so the fallback never turns a
+        missing OpenAPI endpoint into a raised exception.
+        """
+        try:
+            raw = await user_auth.async_get_device_realtime(ps_key_list)
+        except Exception as err:
+            # Best-effort: any failure degrades to the empty dict rather than propagating,
+            # so a dead OpenAPI endpoint plus a failing user API is indistinguishable from
+            # "no per-device data" — never a raised exception.
+            _LOGGER.debug("User-account device realtime fallback failed: %s", err)
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for uuid, points in raw.items():
+            for point_id, point in points.items():
+                # ``point`` is the user API's {id, value, unit, name}; re-key it to the human
+                # measure-point code and inject "code" so the dict matches the OpenAPI path
+                # field-for-field (unknown point_ids keep the numeric id as their code).
+                code = effective_points.get(point_id, point_id)
+                out.setdefault(uuid, {})[code] = {**point, "code": code}
         return out
 
     async def async_get_dev_property_point_value(
