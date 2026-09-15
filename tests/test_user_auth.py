@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -835,6 +836,152 @@ async def test_get_fault_count_empty_when_no_data():
     auth._post = AsyncMock(return_value={"result_msg": "success"})
 
     assert await auth.async_get_fault_count("123") == {}
+
+
+# --- app-native scheduling & home operation mode (#95) ----------------------
+
+
+def _auth_with_post(payload: dict[str, Any]) -> UserAuth:
+    """A logged-in UserAuth whose ``_post`` returns ``payload``."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value=payload)
+    return auth
+
+
+async def test_get_home_setting_sends_ps_id_and_default_type():
+    """async_get_home_setting posts psId + homeSettingType to getHomeSettingDetail (#95)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {"energyManagementModel": "2"}})
+
+    result = await auth.async_get_home_setting("123")
+
+    body = auth._post.call_args.args[1]
+    assert auth._post.call_args.args[0] == ua._HOME_SETTING_DETAIL_PATH
+    assert body["psId"] == "123"
+    assert body["homeSettingType"] == "1"
+    assert result == {"energyManagementModel": "2"}
+
+
+async def test_get_home_setting_honours_explicit_type_and_missing_data():
+    """A non-default homeSettingType is passed through; absent result_data gives {} (#95)."""
+    auth = _auth_with_post({"result_msg": "success"})
+
+    assert await auth.async_get_home_setting(1, "3,4") == {}
+    body = auth._post.call_args.args[1]
+    assert body["homeSettingType"] == "3,4"
+    assert body["psId"] == "1"
+
+
+async def test_set_operation_mode_sends_the_app_field_names():
+    """async_set_operation_mode mirrors saveOperationMode's field names (#95)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {"taskId": "T1"}})
+
+    result = await auth.async_set_operation_mode(
+        "123",
+        uuid="dev-9",
+        device_type="14",
+        energy_management_model="2",
+        sn="SN1",
+        weekly_plan1={"a": 1},
+        weekly_plan2={"b": 2},
+    )
+
+    body = auth._post.call_args.args[1]
+    assert auth._post.call_args.args[0] == ua._OPERATION_MODE_PATH
+    assert body["psId"] == "123"
+    assert body["uuid"] == "dev-9"
+    assert body["deviceType"] == "14"
+    assert body["energyManagementModel"] == "2"
+    assert body["sn"] == "SN1"
+    assert body["weeklyPlan1"] == {"a": 1}
+    assert body["weeklyPlan2"] == {"b": 2}
+    assert result == {"taskId": "T1"}
+
+
+async def test_set_operation_mode_omits_absent_optionals():
+    """sn / weekly plans are left out of the request when not supplied (#95)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {}})
+
+    await auth.async_set_operation_mode("123", uuid="dev-9", device_type="14", energy_management_model="1")
+
+    body = auth._post.call_args.args[1]
+    assert "sn" not in body
+    assert "weeklyPlan1" not in body
+    assert "weeklyPlan2" not in body
+
+
+async def test_get_discharge_template_info_sends_ps_id_and_uuid():
+    """async_get_discharge_template_info posts psId + fastDischargingUuid (#95)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {"list": []}})
+
+    result = await auth.async_get_discharge_template_info("123", "dev-9")
+
+    body = auth._post.call_args.args[1]
+    assert auth._post.call_args.args[0] == ua._DISCHARGE_TEMPLATE_PATH
+    assert body["psId"] == "123"
+    assert body["fastDischargingUuid"] == "dev-9"
+    assert result == {"list": []}
+
+
+async def test_add_or_update_discharge_plan_sends_all_seven_fields():
+    """async_add_or_update_discharge_plan mirrors the app's builder field-for-field (#95)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {"planId": 7}})
+
+    result = await auth.async_add_or_update_discharge_plan(
+        "123",
+        week_days="1,2,3",
+        cycle_type="1",
+        start_plan_time="08:00",
+        discharge_option="1",
+        duration="60",
+        power_value="5000",
+    )
+
+    body = auth._post.call_args.args[1]
+    assert auth._post.call_args.args[0] == ua._DISCHARGE_PLAN_SAVE_PATH
+    assert body["psId"] == "123"
+    assert body["weekDays"] == "1,2,3"
+    assert body["cycleType"] == "1"
+    assert body["startPlanTime"] == "08:00"
+    assert body["dischargeOption"] == "1"
+    assert body["duration"] == "60"
+    assert body["powerValue"] == "5000"
+    assert result == {"planId": 7}
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("async_delete_discharge_plan", ua._DISCHARGE_PLAN_DELETE_PATH),
+        ("async_select_discharge_plan", ua._DISCHARGE_PLAN_SELECT_PATH),
+    ],
+)
+async def test_plan_lifecycle_calls_send_only_ps_id(method: str, path: str):
+    """Both plan lifecycle calls send only psId, as the app's builders do (#95)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {}})
+
+    assert await getattr(auth, method)("123") == {}
+    assert auth._post.call_args.args[0] == path
+    assert auth._post.call_args.args[1]["psId"] == "123"
+
+
+async def test_set_system_power_backup_param_sends_config_map():
+    """async_set_system_power_backup_param posts the app's field names incl. config (#95)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {"ok": True}})
+
+    result = await auth.async_set_system_power_backup_param(
+        "123", task_name="Backup", mode="1", status="1", config={"reservedSoc": "20"}
+    )
+
+    body = auth._post.call_args.args[1]
+    assert auth._post.call_args.args[0] == ua._SYS_POWER_BACKUP_PATH
+    assert body["psId"] == "123"
+    assert body["taskName"] == "Backup"
+    assert body["mode"] == "1"
+    assert body["status"] == "1"
+    assert body["config"] == {"reservedSoc": "20"}
+    assert result == {"ok": True}
 
 
 async def test_get_fault_detail_sends_fault_code():

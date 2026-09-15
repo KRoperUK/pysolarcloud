@@ -176,6 +176,12 @@ left as caller-supplied optional arguments and documented as unverified against 
 | `async_get_open_fault_num()` / `async_get_unread_fault_count(...)` | `getPsOpenFaultNum` / `getNotReadFaultCount` |
 | `async_get_household_storage_report(ps_id, ...)` / `async_get_energy_summary(ps_id, ...)` | `getHouseholdStoragePsReport` / `getPsEnergySummaryInfo` |
 | `async_get_device_day_month_year_history(ps_key, ...)` / `async_get_device_minute_history(ps_key, ...)` | `queryDevicePointsDayMonthYearDataList` / `queryDevicePointMinuteDataList` |
+| `async_get_home_setting(ps_id, home_setting_type)` | `getHomeSettingDetail` |
+| `async_set_operation_mode(ps_id, uuid=…, device_type=…, energy_management_model=…)` | `paramSetHomeSettingOperationMode` |
+| `async_get_discharge_template_info(ps_id, fast_discharging_uuid)` | `getDischargeTemplateInfo` |
+| `async_add_or_update_discharge_plan(ps_id, week_days=…, cycle_type=…, …)` | `addOrUpdateDischargePlan` |
+| `async_delete_discharge_plan(ps_id)` / `async_select_discharge_plan(ps_id)` | `deleteDischargePlan` / `selectDischargePlan` |
+| `async_set_system_power_backup_param(ps_id, task_name=…, mode=…, status=…, config=…)` | `setSysPowerBackupParam` |
 
 > ⚠️ **Breaking change in 0.16.0** — `async_get_device_realtime` now takes a device
 > `ps_key` (from `async_get_devices`) as its single positional argument instead of

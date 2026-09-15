@@ -118,6 +118,20 @@ _PS_ENERGY_SUMMARY_PATH = "/v1/powerStationService/getPsEnergySummaryInfo"
 _DEVICE_DMY_HISTORY_PATH = "/v1/commonService/queryDevicePointsDayMonthYearDataList"
 _DEVICE_MINUTE_HISTORY_PATH = "/v1/commonService/queryDevicePointMinuteDataList"
 
+# --- App-native scheduling & home-operation-mode endpoints (#95) ---------
+#
+# The app drives charge/discharge *scheduling* and the home (energy-management)
+# operation mode through these builders, rather than hand-rolling the raw
+# 10003/10004/10005 dispatch parameter writes. Verified against the app's
+# ``HttpRequest.java``.
+_HOME_SETTING_DETAIL_PATH = "/v1/devService/getHomeSettingDetail"
+_OPERATION_MODE_PATH = "/v1/devService/paramSetHomeSettingOperationMode"
+_DISCHARGE_PLAN_SAVE_PATH = "/v1/devService/addOrUpdateDischargePlan"
+_DISCHARGE_PLAN_DELETE_PATH = "/v1/devService/deleteDischargePlan"
+_DISCHARGE_PLAN_SELECT_PATH = "/v1/devService/selectDischargePlan"
+_DISCHARGE_TEMPLATE_PATH = "/v1/devService/getDischargeTemplateInfo"
+_SYS_POWER_BACKUP_PATH = "/v1/devService/setSysPowerBackupParam"
+
 # Documented result codes meaning the session/login is invalid → re-login (Appendix 2).
 _LOGIN_INVALID_CODES = frozenset({"E00003", "1"})
 
@@ -903,3 +917,159 @@ class UserAuth:
         }
         data = await self.async_request(_DEVICE_MINUTE_HISTORY_PATH, body)
         return data.get("result_data")
+
+    # --- App-native scheduling & home operation mode (#95) -------------------
+    #
+    # The app has a first-class charge/discharge *scheduling* surface, plus a friendlier
+    # "home operation mode" setter, instead of hand-rolling the 10003/10004/10005
+    # dispatch parameter writes that :class:`~pysolarcloud.control.Control` sends. These
+    # expose that surface so consumers can offer multi-window scheduling.
+    #
+    # Method names, paths and request **field names** are verified against the app's
+    # ``HttpRequest.java`` builders.
+    #
+    # .. warning::
+    #     The **values** are not pinned down. ``homeSettingType``,
+    #     ``energyManagementModel``, ``cycleType``, ``dischargeOption``, ``weekDays``
+    #     and the ``weeklyPlan`` payloads are all UI-driven in the app (pickers, not
+    #     constants), and are **unverified against a live device**. They are passed
+    #     through verbatim rather than guessed at, so a caller can supply whatever the
+    #     device accepts. Only the *shape* of the request is asserted here.
+
+    async def async_get_home_setting(self, ps_id: str | int, home_setting_type: str | int = "1") -> dict[str, Any]:
+        """Read a plant's home (energy-management) settings (``getHomeSettingDetail``, #95).
+
+        Sends ``psId`` and ``homeSettingType``. Returns the raw ``result_data`` dict —
+        typically the current operation mode plus backup/reserve settings and weekly
+        plans, though the exact field set is model/region-dependent. ``homeSettingType``
+        defaults to ``"1"``, the value the app's household view model sends; its balcony
+        / micro-storage screen sends ``"3,4"``.
+        """
+        body = {"psId": str(ps_id), "homeSettingType": str(home_setting_type)}
+        data = await self.async_request(_HOME_SETTING_DETAIL_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_set_operation_mode(
+        self,
+        ps_id: str | int,
+        *,
+        uuid: str | int,
+        device_type: str | int,
+        energy_management_model: str | int,
+        sn: str | None = None,
+        weekly_plan1: Any = None,
+        weekly_plan2: Any = None,
+    ) -> dict[str, Any]:
+        """Set a device's home operation mode (``paramSetHomeSettingOperationMode``, #95).
+
+        Mirrors the app's ``saveOperationMode`` builder: ``psId``, ``uuid``,
+        ``deviceType``, ``sn``, ``energyManagementModel`` and up to two weekly-plan
+        objects. ``energy_management_model`` is passed through verbatim — the app takes
+        it from a UI picker, so the accepted values are **unverified** and deliberately
+        not enumerated here. ``sn``, ``weekly_plan1`` and ``weekly_plan2`` are omitted
+        from the request when ``None``.
+
+        Returns the raw ``result_data`` dict.
+        """
+        body: dict[str, Any] = {
+            "psId": str(ps_id),
+            "uuid": str(uuid),
+            "deviceType": str(device_type),
+            "energyManagementModel": str(energy_management_model),
+        }
+        if sn is not None:
+            body["sn"] = str(sn)
+        if weekly_plan1 is not None:
+            body["weeklyPlan1"] = weekly_plan1
+        if weekly_plan2 is not None:
+            body["weeklyPlan2"] = weekly_plan2
+        data = await self.async_request(_OPERATION_MODE_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_get_discharge_template_info(
+        self, ps_id: str | int, fast_discharging_uuid: str | int
+    ) -> dict[str, Any]:
+        """Read the discharge-plan template (``getDischargeTemplateInfo``, #95).
+
+        Sends ``psId`` and ``fastDischargingUuid`` (the inverter's device uuid) — both
+        are always supplied by the app's builder. Returns the raw ``result_data`` dict.
+        """
+        body = {"psId": str(ps_id), "fastDischargingUuid": str(fast_discharging_uuid)}
+        data = await self.async_request(_DISCHARGE_TEMPLATE_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_add_or_update_discharge_plan(
+        self,
+        ps_id: str | int,
+        *,
+        week_days: str | int,
+        cycle_type: str | int,
+        start_plan_time: str,
+        discharge_option: str | int,
+        duration: str | int,
+        power_value: str | int,
+    ) -> dict[str, Any]:
+        """Create or update a charge/discharge plan (``addOrUpdateDischargePlan``, #95).
+
+        Field-for-field with the app's builder: ``psId``, ``weekDays``, ``cycleType``,
+        ``startPlanTime``, ``dischargeOption``, ``duration``, ``powerValue``. Every value
+        is sent verbatim as a string (the app derives them from its schedule UI, so their
+        accepted encodings are **unverified against a live device**).
+
+        Returns the raw ``result_data`` dict.
+        """
+        body = {
+            "psId": str(ps_id),
+            "weekDays": str(week_days),
+            "cycleType": str(cycle_type),
+            "startPlanTime": str(start_plan_time),
+            "dischargeOption": str(discharge_option),
+            "duration": str(duration),
+            "powerValue": str(power_value),
+        }
+        data = await self.async_request(_DISCHARGE_PLAN_SAVE_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_delete_discharge_plan(self, ps_id: str | int) -> dict[str, Any]:
+        """Delete the plant's discharge plan (``deleteDischargePlan``, #95).
+
+        The app's builder sends only ``psId`` — there is no per-plan id in the request,
+        so this acts on the plant's plan as a whole. Returns the raw ``result_data`` dict.
+        """
+        data = await self.async_request(_DISCHARGE_PLAN_DELETE_PATH, {"psId": str(ps_id)})
+        return dict(data.get("result_data") or {})
+
+    async def async_select_discharge_plan(self, ps_id: str | int) -> dict[str, Any]:
+        """Activate the plant's discharge plan (``selectDischargePlan``, #95).
+
+        Like :meth:`async_delete_discharge_plan`, the app's builder sends only ``psId``.
+        Returns the raw ``result_data`` dict.
+        """
+        data = await self.async_request(_DISCHARGE_PLAN_SELECT_PATH, {"psId": str(ps_id)})
+        return dict(data.get("result_data") or {})
+
+    async def async_set_system_power_backup_param(
+        self,
+        ps_id: str | int,
+        *,
+        task_name: str,
+        mode: str | int,
+        status: str | int,
+        config: dict[str, str],
+    ) -> dict[str, Any]:
+        """Set the system power-backup (reserve) parameters (``setSysPowerBackupParam``, #95).
+
+        The app's builder sends ``psId``, ``taskName``, ``mode``, ``status`` and a
+        ``config`` map (the Java constants resolve to the literal key ``"config"``).
+        ``config`` is passed through verbatim — its keys and values are **unverified
+        against a live device**. Returns the raw ``result_data`` dict.
+        """
+        body = {
+            "psId": str(ps_id),
+            "taskName": str(task_name),
+            "mode": str(mode),
+            "status": str(status),
+            "config": config,
+        }
+        data = await self.async_request(_SYS_POWER_BACKUP_PATH, body)
+        return dict(data.get("result_data") or {})
