@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.2](https://github.com/KRoperUK/pysolarcloud/compare/v0.15.1...v0.15.2) (2026-09-15)
+
+
+### Bug Fixes
+
+* let callers override encode_parameter bounds for per-device limits ([#87](https://github.com/KRoperUK/pysolarcloud/issues/87)) ([b8c277c](https://github.com/KRoperUK/pysolarcloud/commit/b8c277cc17f070b226aad67822abd97e2a0a4d17))
+
+
+### Documentation
+
+* document the contribution workflow and the rules main enforces ([#83](https://github.com/KRoperUK/pysolarcloud/issues/83)) ([134d061](https://github.com/KRoperUK/pysolarcloud/commit/134d061dbc593b3de0ae26f63217d324a72067ed))
+
 ## [0.15.1](https://github.com/KRoperUK/pysolarcloud/compare/v0.15.0...v0.15.1) (2026-09-12)
 
 
