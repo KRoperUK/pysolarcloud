@@ -1048,3 +1048,124 @@ async def test_iter_historical_data_uneven_final_chunk(auth, plants):
         ("20240101000000", "20240101030000"),
         ("20240101030000", "20240101040000"),
     ]
+
+
+# --------------------------------------------------------------------------- #
+# async_get_device_realtime — user-account fallback (#85)
+# --------------------------------------------------------------------------- #
+
+
+def _mock_user_auth(realtime_return=None, *, side_effect=None):
+    """Build a stand-in UserAuth exposing only ``async_get_device_realtime``.
+
+    ``realtime_return`` is the ``{uuid: {point_id: {id, value, unit, name}}}`` shape the real
+    :meth:`UserAuth.async_get_device_realtime` returns; ``side_effect`` lets a test make the
+    fallback raise.
+    """
+    user_auth = MagicMock()
+    user_auth.async_get_device_realtime = AsyncMock(return_value=realtime_return or {}, side_effect=side_effect)
+    return user_auth
+
+
+def _empty_openapi_response() -> ClientResponse:
+    """A successful getDeviceRealTimeData response carrying no devices (triggers the fallback)."""
+    return _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": [], "device_point_list": []}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_openapi_data_skips_user_fallback(auth, plants):
+    """When the OpenAPI path returns data, the user_auth fallback is never consulted (#85)."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {
+                "point_dict": [{"point_id": "11111", "point_name": "EV Power", "point_unit": "W"}],
+                "device_point_list": [{"uuid": "dev-1", "p11111": "7000"}],
+            },
+        }
+    )
+    user_auth = _mock_user_auth({"dev-1": {"11111": {"id": "11111", "value": 1.0, "unit": "W", "name": "EV Power"}}})
+
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"], user_auth=user_auth)
+
+    # Unchanged OpenAPI result and the fallback was NOT awaited.
+    assert data["dev-1"]["11111"]["value"] == 7000.0
+    user_auth.async_get_device_realtime.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_falls_back_to_user_auth_when_openapi_empty(auth, plants):
+    """OpenAPI empty + user_auth supplied -> fallback data re-keyed to the OpenAPI shape (#85)."""
+    auth.request.return_value = _empty_openapi_response()
+    # Point 83033 is the canonical "power" measure point; the user API keys by numeric id.
+    user_auth = _mock_user_auth({"dev-1": {"83033": {"id": "83033", "value": 3000.0, "unit": "W", "name": "Power"}}})
+
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"], user_auth=user_auth)
+
+    # Re-keyed to the human code, and shaped exactly like the OpenAPI path (id/code/value/unit/name).
+    assert data == {"dev-1": {"power": {"id": "83033", "value": 3000.0, "unit": "W", "name": "Power", "code": "power"}}}
+    # The fallback was called with the same ps_key_list the OpenAPI path used.
+    user_auth.async_get_device_realtime.assert_awaited_once_with(["dev-1"])
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_fallback_triggers_on_endpoint_missing_code(auth, plants):
+    """The documented "endpoint unavailable" outcome (E996) also triggers the fallback (#85)."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "E996", "result_msg": "api not found", "result_data": None}
+    )
+    user_auth = _mock_user_auth({"dev-1": {"83033": {"id": "83033", "value": 1200.0, "unit": "W", "name": "Power"}}})
+
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"], user_auth=user_auth)
+
+    assert data["dev-1"]["power"]["value"] == 1200.0
+    user_auth.async_get_device_realtime.assert_awaited_once_with(["dev-1"])
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_empty_without_user_auth_is_unchanged(auth, plants):
+    """OpenAPI empty + no user_auth -> {} and no raise (behaviour unchanged) (#85)."""
+    auth.request.return_value = _empty_openapi_response()
+
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"])
+
+    assert data == {}
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_fallback_empty_returns_empty(auth, plants):
+    """OpenAPI empty + user_auth also empty -> {} and no raise (best-effort) (#85)."""
+    auth.request.return_value = _empty_openapi_response()
+    user_auth = _mock_user_auth({})
+
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"], user_auth=user_auth)
+
+    assert data == {}
+    user_auth.async_get_device_realtime.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_fallback_swallows_exceptions(auth, plants):
+    """OpenAPI empty + user_auth raising -> {} and no raise (best-effort) (#85)."""
+    from pysolarcloud import PySolarCloudException
+
+    auth.request.return_value = _empty_openapi_response()
+    user_auth = _mock_user_auth(side_effect=PySolarCloudException({"result_code": "E00003"}))
+
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"], user_auth=user_auth)
+
+    assert data == {}
+
+
+@pytest.mark.asyncio
+async def test_device_realtime_fallback_unknown_point_id_keeps_numeric_code(auth, plants):
+    """A point_id unknown to measure_points keeps the numeric id as its code, like OpenAPI (#85)."""
+    auth.request.return_value = _empty_openapi_response()
+    user_auth = _mock_user_auth({"dev-1": {"99999": {"id": "99999", "value": 42.0, "unit": "W", "name": "Mystery"}}})
+
+    data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-1"], user_auth=user_auth)
+
+    assert data == {"dev-1": {"99999": {"id": "99999", "value": 42.0, "unit": "W", "name": "Mystery", "code": "99999"}}}

@@ -18,7 +18,7 @@ pip install sungrow-isolarcloud
 
 This fork adds:
 * Support for requesting **additional / custom measure points** without modifying the upstream point map (useful for battery charge/discharge power fields that vary by inverter model).
-* A best-effort **per-device realtime** helper for devices such as EV chargers (`Plants.async_get_device_realtime`).
+* A best-effort **per-device realtime** helper for devices such as EV chargers (`Plants.async_get_device_realtime`), which can optionally **fall back to a `UserAuth` session** (pass `user_auth=`) when the OpenAPI per-device endpoint is unavailable for the account/region — returning the same `{uuid: {code: {...}}}` shape so callers need no changes.
 * A **heartbeat** helper for External EMS dispatch mode (`Control.async_heartbeat` / `Control.heartbeat_loop`).
 * Convenience constants for dispatch command value sets (`Control.CHARGE_DISCHARGE_COMMANDS`, `Control.FORCED_CHARGING`).
 
