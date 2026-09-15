@@ -708,3 +708,103 @@ async def test_get_charging_pile_property_sends_string_uuid_and_point_id():
     assert body["uuid"] == "101"
     assert body["point_id"] == "21050"
     assert result == {"value": "32", "unit": "A"}
+
+
+# --- Battery capacity & SoC (#94) -------------------------------------------
+
+
+async def test_get_battery_capacity_sends_ps_id():
+    """async_get_battery_capacity posts ps_id to getBatteryCapacityByPsIdV2 (#94)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={"result_msg": "success", "result_data": {"capacity": {"value": "9.6", "unit": "kWh"}}}
+    )
+
+    result = await auth.async_get_battery_capacity("123")
+
+    assert auth._post.call_args.args[0] == ua._BATTERY_CAPACITY_PATH
+    assert auth._post.call_args.args[1]["ps_id"] == "123"
+    assert result["capacity"] == {"value": "9.6", "unit": "kWh"}
+
+
+async def test_get_battery_capacity_empty_when_no_data():
+    """A response without result_data yields an empty dict."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success"})
+
+    assert await auth.async_get_battery_capacity("123") == {}
+
+
+async def test_get_battery_info_sends_only_ps_id_by_default():
+    """async_get_battery_info sends ps_id alone when no optional params are given (#94)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"soh": "98"}})
+
+    result = await auth.async_get_battery_info("123")
+
+    assert auth._post.call_args.args[0] == ua._BATTERY_INFO_PATH
+    body = auth._post.call_args.args[1]
+    assert body["ps_id"] == "123"
+    assert "query_type" not in body
+    assert "date_id" not in body
+    assert "minute_interval" not in body
+    assert result["soh"] == "98"
+
+
+async def test_get_battery_info_forwards_optional_params():
+    """query_type, date_id and minute_interval are forwarded (stringified) when supplied (#94)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    await auth.async_get_battery_info("123", query_type=1, date_id="20260718", minute_interval=5)
+
+    body = auth._post.call_args.args[1]
+    assert body["query_type"] == "1"
+    assert body["date_id"] == "20260718"
+    assert body["minute_interval"] == "5"
+
+
+async def test_get_soc_by_ps_id_sends_ps_id():
+    """async_get_soc_by_ps_id posts ps_id to querySocByPsId (#94)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"soc": "73"}})
+
+    result = await auth.async_get_soc_by_ps_id("123")
+
+    assert auth._post.call_args.args[0] == ua._SOC_BY_PS_ID_PATH
+    assert auth._post.call_args.args[1]["ps_id"] == "123"
+    assert result["soc"] == "73"
+
+
+async def test_get_soc_by_sn_sends_bt_sn():
+    """async_get_soc_by_sn posts bt_sn to querySocBySn (#94)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"soc": "51"}})
+
+    result = await auth.async_get_soc_by_sn("BT-SN-001")
+
+    assert auth._post.call_args.args[0] == ua._SOC_BY_SN_PATH
+    assert auth._post.call_args.args[1]["bt_sn"] == "BT-SN-001"
+    assert result["soc"] == "51"
+
+
+async def test_get_soc_by_sn_empty_when_no_data():
+    """A response without result_data yields an empty dict."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success"})
+
+    assert await auth.async_get_soc_by_sn("BT-SN-001") == {}
