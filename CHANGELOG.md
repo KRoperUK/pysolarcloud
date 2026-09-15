@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.16.0...v0.17.0) (2026-09-15)
+
+
+### Features
+
+* fall back to the user-account per-device realtime call when the OpenAPI endpoint returns nothing ([#85](https://github.com/KRoperUK/pysolarcloud/issues/85)) ([#101](https://github.com/KRoperUK/pysolarcloud/issues/101)) ([cfc7f78](https://github.com/KRoperUK/pysolarcloud/commit/cfc7f7896605c62c949b8d552d35a2533d7d3646))
+
 ## [0.16.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.15.2...v0.16.0) (2026-09-15)
 
 
