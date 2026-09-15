@@ -73,6 +73,16 @@ _DEVICE_LIST_PATH = "/v1/devService/queryDeviceList"
 _DEVICE_REALTIME_PATH = "/v1/devService/queryDevice"
 _HISTORICAL_DATA_PATH = "/v1/commonService/queryMutiPointDataList"
 
+# EV charger ("charging pile") read paths (all ``/v1/devService/``; #93). The
+# charging-pile devService calls use the app's camelCase ``psId`` parameter (not the
+# ``ps_id`` of the powerStationService calls), and ``getChargingPileRealData`` /
+# ``getChargingPileLastData`` take ``uuid`` as an **integer** on the wire.
+_CHARGING_PILE_LIST_PATH = "/v1/devService/getChargingPileList"
+_CHARGING_PILE_REAL_DATA_PATH = "/v1/devService/getChargingPileRealData"
+_CHARGING_PILE_LAST_DATA_PATH = "/v1/devService/getChargingPileLastData"
+_CHARGE_PILE_OVERVIEW_PATH = "/v1/devService/getChargePileOverviewInfo"
+_CHARGING_PILE_PROPERTY_PATH = "/v1/devService/getChargingPileProperty"
+
 # Documented result codes meaning the session/login is invalid → re-login (Appendix 2).
 _LOGIN_INVALID_CODES = frozenset({"E00003", "1"})
 
@@ -360,3 +370,68 @@ class UserAuth:
             if isinstance(series, list):
                 return series
         return []
+
+    # --- EV charger ("charging pile") reads (#93) ---------------------------
+    #
+    # Read-only helpers for the app's dedicated charging-pile API. EV chargers never
+    # surface through the plant realtime endpoint, so these are the only way to enumerate
+    # and read chargers on the user transport. Control writes (``sendChargingPileCommand``)
+    # are intentionally out of scope here. Verified against the app's ``HttpRequest.java``
+    # ``getChargingPile*`` / ``getChargePileOverviewInfo`` builders.
+
+    async def async_get_charging_piles(self, ps_id: str | int) -> list[dict[str, Any]]:
+        """List the EV chargers (charging piles) for a plant (``getChargingPileList``, #93).
+
+        Sends ``psId`` (the app's camelCase parameter). Returns the list of charger dicts
+        (a ``pageList`` or a bare list, depending on region); each entry typically carries
+        the charger ``uuid``, name and model. Returns ``[]`` when the plant has no chargers.
+        """
+        data = await self.async_request(_CHARGING_PILE_LIST_PATH, {"psId": str(ps_id)})
+        result = data.get("result_data")
+        if isinstance(result, list):
+            return list(result)
+        if isinstance(result, dict):
+            page_list = result.get("pageList")
+            if isinstance(page_list, list):
+                return list(page_list)
+        return []
+
+    async def async_get_charging_pile_realtime(self, uuid: int | str) -> dict[str, Any]:
+        """Return realtime data for one charger (``getChargingPileRealData``, #93).
+
+        ``uuid`` is the charger's integer id; the app sends it as an integer on the wire,
+        so it is coerced to ``int`` here (a non-numeric ``uuid`` raises ``ValueError``).
+        Returns the raw ``result_data`` dict (charge power, session energy, connector
+        state, etc.; the exact fields are model/region-dependent).
+        """
+        data = await self.async_request(_CHARGING_PILE_REAL_DATA_PATH, {"uuid": int(uuid)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_charging_pile_last_data(self, uuid: int | str) -> dict[str, Any]:
+        """Return the last-known data for one charger (``getChargingPileLastData``, #93).
+
+        Like :meth:`async_get_charging_pile_realtime`, ``uuid`` is sent as an integer.
+        Returns the raw ``result_data`` dict.
+        """
+        data = await self.async_request(_CHARGING_PILE_LAST_DATA_PATH, {"uuid": int(uuid)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_charge_pile_overview(self, ps_id: str | int) -> dict[str, Any]:
+        """Return the plant-level charger overview (``getChargePileOverviewInfo``, #93).
+
+        Sends ``psId``. Returns the raw ``result_data`` dict (aggregate charger counts /
+        status for the plant).
+        """
+        data = await self.async_request(_CHARGE_PILE_OVERVIEW_PATH, {"psId": str(ps_id)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_charging_pile_property(self, uuid: int | str, point_id: str | int) -> Any:
+        """Return a single charger property point (``getChargingPileProperty``, #93).
+
+        The app's ``getChargingPileProperty`` builder passes ``uuid`` as a **string** here
+        (unlike the realtime/last-data calls), plus a ``point_id``. Returns the raw
+        ``result_data`` value verbatim — its shape is point-dependent and is
+        **unverified against a live device**, so no assumptions are made about it.
+        """
+        data = await self.async_request(_CHARGING_PILE_PROPERTY_PATH, {"uuid": str(uuid), "point_id": str(point_id)})
+        return data.get("result_data")

@@ -422,3 +422,130 @@ async def test_get_historical_data_empty_result():
     )
 
     assert rows == []
+
+
+# --- EV charger / charging pile (#93) ---------------------------------------
+
+
+async def test_get_charging_piles_returns_page_list():
+    """async_get_charging_piles returns a pageList and sends the camelCase psId."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={
+            "result_msg": "success",
+            "result_data": {"pageList": [{"uuid": 101, "device_name": "Charger A"}]},
+        }
+    )
+
+    piles = await auth.async_get_charging_piles("123")
+
+    assert auth._post.call_args.args[0] == ua._CHARGING_PILE_LIST_PATH
+    assert auth._post.call_args.args[1]["psId"] == "123"
+    assert piles[0]["uuid"] == 101
+
+
+async def test_get_charging_piles_accepts_bare_list():
+    """Some regions return the chargers as a bare list in result_data."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": [{"uuid": 1}, {"uuid": 2}]})
+
+    piles = await auth.async_get_charging_piles("123")
+
+    assert [p["uuid"] for p in piles] == [1, 2]
+
+
+async def test_get_charging_piles_empty_when_no_data():
+    """An empty response returns an empty list."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    assert await auth.async_get_charging_piles("123") == []
+
+
+async def test_get_charging_pile_realtime_sends_int_uuid():
+    """async_get_charging_pile_realtime coerces uuid to an int on the wire (#93)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={"result_msg": "success", "result_data": {"charge_power": {"value": "7.2", "unit": "kW"}}}
+    )
+
+    result = await auth.async_get_charging_pile_realtime("101")
+
+    assert auth._post.call_args.args[0] == ua._CHARGING_PILE_REAL_DATA_PATH
+    body = auth._post.call_args.args[1]
+    assert body["uuid"] == 101
+    assert isinstance(body["uuid"], int)
+    assert result["charge_power"] == {"value": "7.2", "unit": "kW"}
+
+
+async def test_get_charging_pile_realtime_empty_when_no_data():
+    """A response without result_data yields an empty dict."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success"})
+
+    assert await auth.async_get_charging_pile_realtime(101) == {}
+
+
+async def test_get_charging_pile_realtime_rejects_non_numeric_uuid():
+    """A non-numeric uuid raises ValueError (the app treats uuid as an integer)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    with pytest.raises(ValueError):
+        await auth.async_get_charging_pile_realtime("not-an-int")
+
+
+async def test_get_charging_pile_last_data_sends_int_uuid():
+    """async_get_charging_pile_last_data posts an int uuid to the last-data path (#93)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"soc": "80"}})
+
+    result = await auth.async_get_charging_pile_last_data(101)
+
+    assert auth._post.call_args.args[0] == ua._CHARGING_PILE_LAST_DATA_PATH
+    assert auth._post.call_args.args[1]["uuid"] == 101
+    assert result["soc"] == "80"
+
+
+async def test_get_charge_pile_overview_sends_ps_id():
+    """async_get_charge_pile_overview posts psId to the overview path (#93)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"total_count": 2}})
+
+    result = await auth.async_get_charge_pile_overview("123")
+
+    assert auth._post.call_args.args[0] == ua._CHARGE_PILE_OVERVIEW_PATH
+    assert auth._post.call_args.args[1]["psId"] == "123"
+    assert result["total_count"] == 2
+
+
+async def test_get_charging_pile_property_sends_string_uuid_and_point_id():
+    """async_get_charging_pile_property sends a string uuid + point_id and returns raw data (#93)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"value": "32", "unit": "A"}})
+
+    result = await auth.async_get_charging_pile_property(101, 21050)
+
+    assert auth._post.call_args.args[0] == ua._CHARGING_PILE_PROPERTY_PATH
+    body = auth._post.call_args.args[1]
+    assert body["uuid"] == "101"
+    assert body["point_id"] == "21050"
+    assert result == {"value": "32", "unit": "A"}
