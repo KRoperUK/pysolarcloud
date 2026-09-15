@@ -152,6 +152,39 @@ async with UserAuth(Server.Europe, "you@example.com", "password") as auth:
 > [homebridge-platform-isolarcloud](https://github.com/MortJC/homebridge-platform-isolarcloud)
 > (see `NOTICE`). Credentials are only sent to iSolarCloud over TLS and are never logged.
 
+## User-account read helpers
+
+`UserAuth` mirrors the iSolarCloud app's read API. All of the following are **read-only**;
+endpoint paths and parameter *names* were verified against the app, but where the app uses
+undocumented enum values (e.g. `date_type`, `query_type`, fault type/share codes) those are
+left as caller-supplied optional arguments and documented as unverified against a live device.
+
+| Method | App endpoint |
+| --- | --- |
+| `async_get_plants()` | `getPsList` |
+| `async_get_plant_detail(ps_id)` | `getPsDetailWithPsType` (realtime household view) |
+| `async_get_plant_detail_daily(ps_id, date_id)` | `getPsDetail` (daily view) |
+| `async_get_devices(ps_id)` | `queryDeviceList` |
+| `async_get_device_realtime(ps_key, *, point_ids=None)` | `queryDeviceRealTimeDataByPsKeys` |
+| `async_get_historical_data(...)` | `queryMutiPointDataList` |
+| `async_get_charging_piles(ps_id)` / `async_get_charge_pile_overview(ps_id)` | `getChargingPileList` / `getChargePileOverviewInfo` |
+| `async_get_charging_pile_realtime(uuid)` / `async_get_charging_pile_last_data(uuid)` | `getChargingPileRealData` / `getChargingPileLastData` |
+| `async_get_charging_pile_property(uuid, point_id)` | `getChargingPileProperty` |
+| `async_get_battery_capacity(ps_id)` / `async_get_soc_by_ps_id(ps_id)` / `async_get_soc_by_sn(bt_sn)` | `getBatteryCapacityByPsIdV2` / `querySocByPsId` / `querySocBySn` |
+| `async_get_battery_info(ps_id, ...)` | `getPsBatteryInfo` |
+| `async_get_fault_count(ps_id)` / `async_query_faults(...)` / `async_get_fault_detail(fault_code)` | `getDevFaultCountByPsId` / `queryFaultList` / `getFaultDetail` |
+| `async_get_open_fault_num()` / `async_get_unread_fault_count(...)` | `getPsOpenFaultNum` / `getNotReadFaultCount` |
+| `async_get_household_storage_report(ps_id, ...)` / `async_get_energy_summary(ps_id, ...)` | `getHouseholdStoragePsReport` / `getPsEnergySummaryInfo` |
+| `async_get_device_day_month_year_history(ps_key, ...)` / `async_get_device_minute_history(ps_key, ...)` | `queryDevicePointsDayMonthYearDataList` / `queryDevicePointMinuteDataList` |
+
+> ⚠️ **Breaking change in 0.16.0** — `async_get_device_realtime` now takes a device
+> `ps_key` (from `async_get_devices`) as its single positional argument instead of
+> `(ps_id, device_sn)`, and returns data keyed by device `uuid`
+> (`{uuid: {point_id: {"id", "value", "unit", "name"}}}`) instead of a flat
+> `{point_id: {"value", "unit"}}` map. It now posts to `queryDeviceRealTimeDataByPsKeys`;
+> the previous `/v1/devService/queryDevice` path did not exist in the app. Migrate by
+> passing the device `ps_key` and reading points under each `uuid`.
+
 # Contributions
 Ideas or contributions are welcome. I am not affiliated with Sungrow, I'm just another user of the API. My main use case will be a HomeAssistant integration based on this package.
 

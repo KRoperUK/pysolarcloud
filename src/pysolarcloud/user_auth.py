@@ -68,10 +68,55 @@ PUBLIC_KEY_PEM = (
 
 _LOGIN_PATH = "/v1/userService/login"
 _PLANT_LIST_PATH = "/v1/powerStationService/getPsList"
+# Daily-detail path (``getPsDetail(ps_id, date_id)`` in the app's HttpRequest.java).
 _PLANT_DETAIL_PATH = "/v1/powerStationService/getPsDetail"
+# Realtime household view path (``getPsDetailBalcony``/``getPsDetailOversea`` in the app).
+_PLANT_DETAIL_WITH_TYPE_PATH = "/v1/powerStationService/getPsDetailWithPsType"
 _DEVICE_LIST_PATH = "/v1/devService/queryDeviceList"
-_DEVICE_REALTIME_PATH = "/v1/devService/queryDevice"
+# Per-device realtime, keyed by ``ps_key`` (the app's canonical path; #89). The old
+# ``/v1/devService/queryDevice`` this replaced does not exist in the app.
+_DEVICE_REALTIME_PATH = "/v1/devService/queryDeviceRealTimeDataByPsKeys"
 _HISTORICAL_DATA_PATH = "/v1/commonService/queryMutiPointDataList"
+
+# EV charger ("charging pile") read paths (all ``/v1/devService/``; #93). The
+# charging-pile devService calls use the app's camelCase ``psId`` parameter (not the
+# ``ps_id`` of the powerStationService calls), and ``getChargingPileRealData`` /
+# ``getChargingPileLastData`` take ``uuid`` as an **integer** on the wire.
+_CHARGING_PILE_LIST_PATH = "/v1/devService/getChargingPileList"
+_CHARGING_PILE_REAL_DATA_PATH = "/v1/devService/getChargingPileRealData"
+_CHARGING_PILE_LAST_DATA_PATH = "/v1/devService/getChargingPileLastData"
+_CHARGE_PILE_OVERVIEW_PATH = "/v1/devService/getChargePileOverviewInfo"
+_CHARGING_PILE_PROPERTY_PATH = "/v1/devService/getChargingPileProperty"
+
+# Battery capacity & SoC read paths (#94). ``getBatteryCapacityByPsIdV2``,
+# ``querySocByPsId`` and ``querySocBySn`` live under ``/v1/devService/`` and take the
+# ``ps_id`` / ``bt_sn`` params of the app builders; ``getPsBatteryInfo`` lives under
+# ``/v1/powerStationService/`` and additionally takes ``query_type`` + ``date_id``.
+_BATTERY_CAPACITY_PATH = "/v1/devService/getBatteryCapacityByPsIdV2"
+_BATTERY_INFO_PATH = "/v1/powerStationService/getPsBatteryInfo"
+_SOC_BY_PS_ID_PATH = "/v1/devService/querySocByPsId"
+_SOC_BY_SN_PATH = "/v1/devService/querySocBySn"
+
+# Fault / alarm READ paths (#96). All under ``/v1/faultService/`` in the app's
+# ``HttpRequest.java`` fault builders. Read-only; fault acknowledgement / repair writes
+# are intentionally out of scope.
+_FAULT_COUNT_BY_PS_PATH = "/v1/faultService/getDevFaultCountByPsId"
+_FAULT_LIST_PATH = "/v1/faultService/queryFaultList"
+_FAULT_DETAIL_PATH = "/v1/faultService/getFaultDetail"
+_PS_OPEN_FAULT_NUM_PATH = "/v1/faultService/getPsOpenFaultNum"
+_NOT_READ_FAULT_COUNT_PATH = "/v1/faultService/getNotReadFaultCount"
+
+# Aggregate energy / report READ paths (#97), both under ``/v1/powerStationService/``.
+_HOUSEHOLD_STORAGE_REPORT_PATH = "/v1/powerStationService/getHouseholdStoragePsReport"
+_PS_ENERGY_SUMMARY_PATH = "/v1/powerStationService/getPsEnergySummaryInfo"
+
+# Per-device history READ paths (#98), both under ``/v1/commonService/``. The
+# day/month/year path is the app's **plural** ``queryDevicePointsDayMonthYearDataList``
+# builder (fully parameterised in ``HttpRequest.java``); the app also registers a
+# *singular* ``queryDevicePointDayMonthYearDataList`` path with no named builder, so the
+# verified plural builder is used here (see :meth:`async_get_device_day_month_year_history`).
+_DEVICE_DMY_HISTORY_PATH = "/v1/commonService/queryDevicePointsDayMonthYearDataList"
+_DEVICE_MINUTE_HISTORY_PATH = "/v1/commonService/queryDevicePointMinuteDataList"
 
 # Documented result codes meaning the session/login is invalid → re-login (Appendix 2).
 _LOGIN_INVALID_CODES = frozenset({"E00003", "1"})
@@ -146,12 +191,18 @@ class UserAuth:
         app_key: str = APP_KEY,
         access_key: str = ACCESS_KEY,
         public_key_pem: str = PUBLIC_KEY_PEM,
+        sys_code: str = SYS_CODE,
         lang: str = "_en_US",
     ) -> None:
         """Initialise the user-account auth.
 
         If ``websession`` is not supplied, an owned session with a request timeout is
         created and closed by :meth:`async_close` / ``async with`` exit.
+
+        ``sys_code`` selects the client surface the ``sys_code`` header advertises:
+        ``"200"`` (the default) is the **web** client; the phone app sends ``"900"``.
+        Both are accepted, but the two surfaces can return different field sets, so pass
+        ``sys_code="900"`` to request the app surface (#91).
         """
         self.host = host.value if isinstance(host, Server) else host
         self._email = email
@@ -159,6 +210,7 @@ class UserAuth:
         self.app_key = app_key
         self.access_key = access_key
         self.public_key_pem = public_key_pem
+        self.sys_code = sys_code
         self.lang = lang
         self._owns_session = websession is None
         if websession is None:
@@ -192,7 +244,7 @@ class UserAuth:
         key = _random_aes_key()
         headers = {
             "content-type": "application/json;charset=UTF-8",
-            "sys_code": SYS_CODE,
+            "sys_code": self.sys_code,
             "x-access-key": self.access_key,
             "x-random-secret-key": _rsa_encrypt(key, self.public_key_pem),
             "x-limit-obj": _rsa_encrypt(user_id, self.public_key_pem),
@@ -286,14 +338,43 @@ class UserAuth:
         return list(page_list) if isinstance(page_list, list) else []
 
     async def async_get_plant_detail(self, ps_id: str | int) -> dict[str, Any]:
-        """Return a plant's detail/realtime payload (``getPsDetail``), for the app/web API.
+        """Return a plant's realtime household detail payload, for the app/web API (#90).
+
+        Posts to ``getPsDetailWithPsType`` — the path the app's realtime household
+        dashboard (``getPsDetailBalcony`` / ``getPsDetailOversea``) actually uses — with
+        ``is_get_ps_level_data=1``, ``version_tag=1``, ``is_shut_down_flag=1`` and
+        ``is_get_hm_info=1``. Non-China regions additionally send ``func_code=5`` (the
+        ``getPsDetailOversea`` variant). This replaces the previous ``getPsDetail`` call
+        that mis-sent ``valid_flag`` (a ``getPsList`` parameter), the likely cause of the
+        unit-less realtime fields consumers had to work around.
 
         Returns the raw ``result_data`` dict (e.g. ``curr_power`` and other plant-level
         fields). The exact field set is model/region-dependent; consumers map it onto the
-        measure-point model (KRoperUK/sungrow-hass#269). ``valid_flag`` mirrors the
-        reference client.
+        measure-point model (KRoperUK/sungrow-hass#269).
         """
-        data = await self.async_request(_PLANT_DETAIL_PATH, {"ps_id": str(ps_id), "valid_flag": "1,3"})
+        body: dict[str, Any] = {
+            "ps_id": str(ps_id),
+            "is_get_ps_level_data": "1",
+            "version_tag": "1",
+            "is_shut_down_flag": "1",
+            "is_get_hm_info": "1",
+        }
+        # China (``gateway.isolarcloud.com``) uses the domestic variant, which omits
+        # ``func_code``; every other region mirrors ``getPsDetailOversea`` and adds
+        # ``func_code=5``.
+        if self.host != Server.China.value:
+            body["func_code"] = "5"
+        data = await self.async_request(_PLANT_DETAIL_WITH_TYPE_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_get_plant_detail_daily(self, ps_id: str | int, date_id: str) -> dict[str, Any]:
+        """Return a plant's daily-detail payload via ``getPsDetail(ps_id, date_id)`` (#90).
+
+        The app's ``getPsDetail`` builder takes ``ps_id`` plus a ``date_id`` (``YYYYMMDD``)
+        and serves the daily/history detail view — distinct from the realtime household
+        view :meth:`async_get_plant_detail` now uses. Returns the raw ``result_data`` dict.
+        """
+        data = await self.async_request(_PLANT_DETAIL_PATH, {"ps_id": str(ps_id), "date_id": str(date_id)})
         return dict(data.get("result_data") or {})
 
     async def async_get_devices(self, ps_id: str | int) -> list[dict[str, Any]]:
@@ -314,18 +395,78 @@ class UserAuth:
         return []
 
     async def async_get_device_realtime(
-        self, ps_id: str | int, device_sn: str, *, point_ids: list[str] | None = None
-    ) -> dict[str, Any]:
-        """Return per-device realtime data for a specific device (by serial number, #53).
+        self, ps_key: str | list[str], *, point_ids: list[str] | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Return per-device realtime data keyed by device uuid (#89).
 
-        Returns a dict of ``{point_id: {value, unit}}`` pairs for the device. If
-        ``point_ids`` is None, all available points are returned.
+        Posts to ``queryDeviceRealTimeDataByPsKeys`` — the app's canonical per-device
+        realtime path, keyed by ``ps_key`` — using the app's request shape
+        ``{ps_key_list, point_id_list, is_get_point_dict}``. This replaces the previous
+        ``{ps_id, sn, points}`` call to ``/v1/devService/queryDevice``, a path that does
+        not exist in the app.
+
+        ``ps_key`` is a single device ``ps_key`` (from :meth:`async_get_devices`) or a
+        list of them. ``point_ids`` optionally restricts the points requested; when
+        omitted the server returns its default set.
+
+        Returns ``{uuid: {point_id: {"id", "value", "unit", "name"}}}``, mirroring the
+        ``point_dict`` / ``device_point`` / ``p<id>`` parsing of
+        :meth:`Plants.async_get_device_realtime`.
+
+        .. note::
+            The app registers this path in ``AppUrlPath.java`` but builds its body
+            dynamically, so the exact request field names (``ps_key_list``,
+            ``point_id_list``, ``is_get_point_dict``) are taken from the sibling OpenAPI
+            ``getDeviceRealTimeData`` shape rather than a named app builder, and are
+            **unverified against a live device**.
         """
-        body: dict[str, Any] = {"ps_id": str(ps_id), "sn": device_sn}
+        ps_key_list = [ps_key] if isinstance(ps_key, str) else [str(k) for k in ps_key]
+        body: dict[str, Any] = {"ps_key_list": ps_key_list, "is_get_point_dict": "1"}
         if point_ids:
-            body["points"] = ",".join(point_ids)
+            body["point_id_list"] = [str(pid) for pid in point_ids]
         data = await self.async_request(_DEVICE_REALTIME_PATH, body)
-        return dict(data.get("result_data") or {})
+        result = data.get("result_data") or {}
+        point_dict_items = result.get("point_dict") or []
+        point_dict = {str(p["point_id"]): p for p in point_dict_items if isinstance(p, dict) and "point_id" in p}
+        out: dict[str, dict[str, Any]] = {}
+        device_list = result.get("device_point_list") or []
+        for entry in device_list:
+            # getDeviceRealTimeData-style responses nest the device fields (uuid + p<id>
+            # values) under a "device_point" key; others put them at the top level.
+            device = entry.get("device_point", entry) if isinstance(entry, dict) else entry
+            if not isinstance(device, dict):
+                continue
+            uuid = str(device.get("uuid") or device.get("device_id") or "")
+            if not uuid:
+                continue
+            points = {
+                k[1:]: self._format_point(k[1:], v, point_dict)
+                for k, v in device.items()
+                if k[0] == "p" and k[1:].isdigit()
+            }
+            out.setdefault(uuid, {}).update(points)
+        return out
+
+    @staticmethod
+    def _format_point(point_id: str, point_value: Any, point_dict: dict[str, Any]) -> dict[str, Any]:
+        """Normalise a single ``p<id>`` value into ``{id, value, unit, name}``.
+
+        Mirrors :meth:`Plants._format_measure_point` minus the code map (the user API has
+        no static measure-point name table), coercing numeric strings to ``float`` and
+        pulling ``point_unit`` / ``point_name`` from the response ``point_dict``.
+        """
+        v: float | str | None
+        try:
+            v = float(point_value) if point_value is not None else None
+        except (TypeError, ValueError):
+            v = point_value
+        meta = point_dict.get(point_id, {})
+        return {
+            "id": point_id,
+            "value": v,
+            "unit": meta.get("point_unit"),
+            "name": meta.get("point_name"),
+        }
 
     async def async_get_historical_data(
         self,
@@ -360,3 +501,405 @@ class UserAuth:
             if isinstance(series, list):
                 return series
         return []
+
+    # --- EV charger ("charging pile") reads (#93) ---------------------------
+    #
+    # Read-only helpers for the app's dedicated charging-pile API. EV chargers never
+    # surface through the plant realtime endpoint, so these are the only way to enumerate
+    # and read chargers on the user transport. Control writes (``sendChargingPileCommand``)
+    # are intentionally out of scope here. Verified against the app's ``HttpRequest.java``
+    # ``getChargingPile*`` / ``getChargePileOverviewInfo`` builders.
+
+    async def async_get_charging_piles(self, ps_id: str | int) -> list[dict[str, Any]]:
+        """List the EV chargers (charging piles) for a plant (``getChargingPileList``, #93).
+
+        Sends ``psId`` (the app's camelCase parameter). Returns the list of charger dicts
+        (a ``pageList`` or a bare list, depending on region); each entry typically carries
+        the charger ``uuid``, name and model. Returns ``[]`` when the plant has no chargers.
+        """
+        data = await self.async_request(_CHARGING_PILE_LIST_PATH, {"psId": str(ps_id)})
+        result = data.get("result_data")
+        if isinstance(result, list):
+            return list(result)
+        if isinstance(result, dict):
+            page_list = result.get("pageList")
+            if isinstance(page_list, list):
+                return list(page_list)
+        return []
+
+    async def async_get_charging_pile_realtime(self, uuid: int | str) -> dict[str, Any]:
+        """Return realtime data for one charger (``getChargingPileRealData``, #93).
+
+        ``uuid`` is the charger's integer id; the app sends it as an integer on the wire,
+        so it is coerced to ``int`` here (a non-numeric ``uuid`` raises ``ValueError``).
+        Returns the raw ``result_data`` dict (charge power, session energy, connector
+        state, etc.; the exact fields are model/region-dependent).
+        """
+        data = await self.async_request(_CHARGING_PILE_REAL_DATA_PATH, {"uuid": int(uuid)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_charging_pile_last_data(self, uuid: int | str) -> dict[str, Any]:
+        """Return the last-known data for one charger (``getChargingPileLastData``, #93).
+
+        Like :meth:`async_get_charging_pile_realtime`, ``uuid`` is sent as an integer.
+        Returns the raw ``result_data`` dict.
+        """
+        data = await self.async_request(_CHARGING_PILE_LAST_DATA_PATH, {"uuid": int(uuid)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_charge_pile_overview(self, ps_id: str | int) -> dict[str, Any]:
+        """Return the plant-level charger overview (``getChargePileOverviewInfo``, #93).
+
+        Sends ``psId``. Returns the raw ``result_data`` dict (aggregate charger counts /
+        status for the plant).
+        """
+        data = await self.async_request(_CHARGE_PILE_OVERVIEW_PATH, {"psId": str(ps_id)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_charging_pile_property(self, uuid: int | str, point_id: str | int) -> Any:
+        """Return a single charger property point (``getChargingPileProperty``, #93).
+
+        The app's ``getChargingPileProperty`` builder passes ``uuid`` as a **string** here
+        (unlike the realtime/last-data calls), plus a ``point_id``. Returns the raw
+        ``result_data`` value verbatim — its shape is point-dependent and is
+        **unverified against a live device**, so no assumptions are made about it.
+        """
+        data = await self.async_request(_CHARGING_PILE_PROPERTY_PATH, {"uuid": str(uuid), "point_id": str(point_id)})
+        return data.get("result_data")
+
+    # --- Battery capacity & SoC reads (#94) ---------------------------------
+    #
+    # Read-only helpers exposing the app's real battery nameplate capacity and SoC, so
+    # consumers can size charge/discharge power ceilings per device instead of a static
+    # cap. Verified against the app's ``HttpRequest.java`` builders.
+
+    async def async_get_battery_capacity(self, ps_id: str | int) -> dict[str, Any]:
+        """Return real battery nameplate capacity for a plant (``getBatteryCapacityByPsIdV2``, #94).
+
+        Sends ``ps_id``. Returns the raw ``result_data`` dict (nameplate/usable capacity;
+        the exact fields are model/region-dependent).
+        """
+        data = await self.async_request(_BATTERY_CAPACITY_PATH, {"ps_id": str(ps_id)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_battery_info(
+        self,
+        ps_id: str | int,
+        *,
+        query_type: str | int | None = None,
+        date_id: str | None = None,
+        minute_interval: str | int | None = None,
+    ) -> dict[str, Any]:
+        """Return the plant battery info block (``getPsBatteryInfo``, #94).
+
+        Sends ``ps_id`` and, when provided, ``query_type``, ``date_id`` and
+        ``minute_interval``. Returns the raw ``result_data`` dict.
+
+        .. note::
+            The app's ``getPsBatteryInfo`` builder always sends ``query_type`` and
+            ``date_id`` alongside ``ps_id`` (with an optional ``minute_interval``). The
+            **parameter names** are verified against the app, but their accepted **values**
+            (which ``query_type`` selects which block; the ``date_id`` format) are
+            **unverified against a live device**, so they are left to the caller and only
+            included when supplied.
+        """
+        body: dict[str, Any] = {"ps_id": str(ps_id)}
+        if query_type is not None:
+            body["query_type"] = str(query_type)
+        if date_id is not None:
+            body["date_id"] = str(date_id)
+        if minute_interval is not None:
+            body["minute_interval"] = str(minute_interval)
+        data = await self.async_request(_BATTERY_INFO_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_get_soc_by_ps_id(self, ps_id: str | int) -> dict[str, Any]:
+        """Return battery SoC for a plant (``querySocByPsId``, #94).
+
+        Sends ``ps_id``. Returns the raw ``result_data`` dict (state of charge; the exact
+        fields are model/region-dependent).
+        """
+        data = await self.async_request(_SOC_BY_PS_ID_PATH, {"ps_id": str(ps_id)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_soc_by_sn(self, bt_sn: str) -> dict[str, Any]:
+        """Return battery SoC for a specific battery serial (``querySocBySn``, #94).
+
+        Sends ``bt_sn`` (the app's battery-serial parameter name). Returns the raw
+        ``result_data`` dict.
+        """
+        data = await self.async_request(_SOC_BY_SN_PATH, {"bt_sn": str(bt_sn)})
+        return dict(data.get("result_data") or {})
+
+    # --- Fault / alarm reads (#96) ------------------------------------------
+    #
+    # Read-only helpers over the app's ``/v1/faultService/`` API. Fault
+    # acknowledgement / repair-order writes are intentionally out of scope. Verified
+    # against the app's ``HttpRequest.java`` fault builders.
+
+    async def async_get_fault_count(self, ps_id: str | int) -> dict[str, Any]:
+        """Return the device fault count for a plant (``getDevFaultCountByPsId``, #96).
+
+        Sends ``ps_id``. Returns the raw ``result_data`` dict (per-type fault counts; the
+        exact fields are model/region-dependent).
+        """
+        data = await self.async_request(_FAULT_COUNT_BY_PS_PATH, {"ps_id": str(ps_id)})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_fault_detail(self, fault_code: str | int) -> dict[str, Any]:
+        """Return the detail for a single fault (``getFaultDetail``, #96).
+
+        Sends ``fault_code`` (the app's parameter name). Returns the raw ``result_data``
+        dict.
+        """
+        data = await self.async_request(_FAULT_DETAIL_PATH, {"fault_code": str(fault_code)})
+        return dict(data.get("result_data") or {})
+
+    async def async_query_faults(
+        self,
+        ps_id: str | int | None = None,
+        *,
+        ps_key: str | None = None,
+        uuid: str | None = None,
+        process_status: str | int | None = None,
+        fault_type: str | int | None = None,
+        fault_type_code: str | int | None = None,
+        share_type: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        sort_column: str | None = None,
+        sort_type: str | None = None,
+        fault_name_like: str | None = None,
+        cur_page: int = 1,
+        size: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Return a page of faults for the account/plant (``queryFaultList``, #96).
+
+        Maps optional filters onto the app's ``queryFaultList`` parameters — note the
+        app's camelCase ``startTime`` / ``endTime`` / ``curPage`` on the wire. ``user_id``
+        is injected by :meth:`async_request`. Only supplied filters are sent. Returns the
+        ``pageList`` (or a bare list, depending on region), or ``[]`` when empty.
+
+        .. note::
+            The **parameter names** are verified against the app's ``HttpRequest.java``
+            builder, but the accepted **values** of ``process_status``, ``fault_type``,
+            ``fault_type_code``, ``share_type``, ``sort_column`` and ``sort_type`` (which
+            are app-internal enums) and the ``startTime`` / ``endTime`` formats are
+            **unverified against a live device**, so they are left entirely to the caller.
+        """
+        body: dict[str, Any] = {"curPage": int(cur_page), "size": int(size)}
+        if ps_id is not None:
+            body["ps_id"] = str(ps_id)
+        if ps_key is not None:
+            body["ps_key"] = str(ps_key)
+        if uuid is not None:
+            body["uuid"] = str(uuid)
+        if process_status is not None:
+            body["process_status"] = str(process_status)
+        if fault_type is not None:
+            body["fault_type"] = str(fault_type)
+        if fault_type_code is not None:
+            body["fault_type_code"] = str(fault_type_code)
+        if share_type is not None:
+            body["share_type"] = str(share_type)
+        if start_time is not None:
+            body["startTime"] = str(start_time)
+        if end_time is not None:
+            body["endTime"] = str(end_time)
+        if sort_column is not None:
+            body["sort_column"] = str(sort_column)
+        if sort_type is not None:
+            body["sort_type"] = str(sort_type)
+        if fault_name_like is not None:
+            body["fault_name_like"] = str(fault_name_like)
+        data = await self.async_request(_FAULT_LIST_PATH, body)
+        result = data.get("result_data")
+        if isinstance(result, list):
+            return list(result)
+        if isinstance(result, dict):
+            page_list = result.get("pageList")
+            if isinstance(page_list, list):
+                return list(page_list)
+        return []
+
+    async def async_get_open_fault_num(self) -> dict[str, Any]:
+        """Return the count of open faults for the account (``getPsOpenFaultNum``, #96).
+
+        Sends the app's constant ``share_type="0,1,2"`` (owner/shared/authorised) and
+        takes no caller parameters. Returns the raw ``result_data`` dict.
+        """
+        data = await self.async_request(_PS_OPEN_FAULT_NUM_PATH, {"share_type": "0,1,2"})
+        return dict(data.get("result_data") or {})
+
+    async def async_get_unread_fault_count(
+        self,
+        *,
+        type: str | int | None = None,
+        ps_id: str | int | None = None,
+        uuid: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the unread-fault count (``getNotReadFaultCount``, #96).
+
+        Sends the app's ``type`` / ``ps_id`` / ``uuid`` parameters when supplied. Returns
+        the raw ``result_data`` dict.
+
+        .. note::
+            The **parameter names** are verified against the app, but the accepted
+            **values** of ``type`` (the app passes e.g. ``"3"``, whose meaning is
+            undocumented) are **unverified against a live device** and left to the caller.
+        """
+        body: dict[str, Any] = {}
+        if type is not None:
+            body["type"] = str(type)
+        if ps_id is not None:
+            body["ps_id"] = str(ps_id)
+        if uuid is not None:
+            body["uuid"] = str(uuid)
+        data = await self.async_request(_NOT_READ_FAULT_COUNT_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    # --- Aggregate energy / report reads (#97) ------------------------------
+    #
+    # Read-only helpers over the app's household-storage report and energy-summary
+    # endpoints. Verified against the app's ``HttpRequest.java`` builders.
+
+    async def async_get_household_storage_report(
+        self,
+        ps_id: str | int,
+        *,
+        date_type: str | int | None = None,
+        date_id: str | None = None,
+        minute_interval: str | int | None = None,
+    ) -> dict[str, Any]:
+        """Return the household-storage energy report (``getHouseholdStoragePsReport``, #97).
+
+        Sends ``ps_id`` and the app's constant ``version_tag="1"``, plus ``date_type``,
+        ``date_id`` and ``minute_interval`` when supplied. Returns the raw ``result_data``
+        dict (period energy totals / series).
+
+        .. note::
+            The **parameter names** are verified against the app, but the accepted
+            **values** of ``date_type`` (day/month/year selector) and the ``date_id``
+            format are **unverified against a live device**, so they are left to the
+            caller and only sent when supplied.
+        """
+        body: dict[str, Any] = {"ps_id": str(ps_id), "version_tag": "1"}
+        if date_type is not None:
+            body["date_type"] = str(date_type)
+        if date_id is not None:
+            body["date_id"] = str(date_id)
+        if minute_interval is not None:
+            body["minute_interval"] = str(minute_interval)
+        data = await self.async_request(_HOUSEHOLD_STORAGE_REPORT_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_get_energy_summary(
+        self,
+        ps_id: str | int,
+        *,
+        date_type: str | int | None = None,
+        date_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the plant energy summary (``getPsEnergySummaryInfo``, #97).
+
+        Sends ``ps_id`` plus ``date_type`` and ``date_id`` when supplied. Returns the raw
+        ``result_data`` dict.
+
+        .. note::
+            The **parameter names** are verified against the app, but the accepted
+            **values** of ``date_type`` and the ``date_id`` format are **unverified
+            against a live device**, so they are left to the caller and only sent when
+            supplied.
+        """
+        body: dict[str, Any] = {"ps_id": str(ps_id)}
+        if date_type is not None:
+            body["date_type"] = str(date_type)
+        if date_id is not None:
+            body["date_id"] = str(date_id)
+        data = await self.async_request(_PS_ENERGY_SUMMARY_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    # --- Per-device day/month/year & minute history reads (#98) -------------
+    #
+    # Read-only per-device time-series helpers keyed by ``ps_key``. Verified against the
+    # app's ``HttpRequest.java`` ``queryDevicePointsDayMonthYearDataList`` and
+    # ``queryDevicePointMinuteDataList`` builders.
+
+    async def async_get_device_day_month_year_history(
+        self,
+        ps_key: str,
+        *,
+        data_point: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        data_type: str | int | None = None,
+        order: str | int | None = None,
+        query_type: str | int | None = None,
+        is_get_point_info: bool = False,
+    ) -> Any:
+        """Return per-device day/month/year aggregated history (#98).
+
+        Posts to ``queryDevicePointsDayMonthYearDataList`` — the app's **plural** builder,
+        which is fully parameterised in ``HttpRequest.java`` with ``ps_key``,
+        ``data_point``, ``start_time``, ``end_time``, ``data_type``, ``order``,
+        ``query_type`` and an optional ``is_get_point_info=1``. Optional args are sent only
+        when supplied. Returns the raw ``result_data`` value verbatim.
+
+        .. note::
+            The app *also* registers a **singular** ``queryDevicePointDayMonthYearDataList``
+            path with no named builder; this helper uses the verified plural builder
+            instead. The **parameter names** are verified, but the accepted **values** of
+            ``data_type`` (day/month/year), ``order`` and ``query_type``, and the
+            ``start_time`` / ``end_time`` formats, are **unverified against a live device**
+            and are left to the caller. The response shape is likewise unverified, so the
+            raw ``result_data`` is returned without normalisation.
+        """
+        body: dict[str, Any] = {"ps_key": str(ps_key)}
+        if data_point is not None:
+            body["data_point"] = str(data_point)
+        if start_time is not None:
+            body["start_time"] = str(start_time)
+        if end_time is not None:
+            body["end_time"] = str(end_time)
+        if data_type is not None:
+            body["data_type"] = str(data_type)
+        if order is not None:
+            body["order"] = str(order)
+        if query_type is not None:
+            body["query_type"] = str(query_type)
+        if is_get_point_info:
+            body["is_get_point_info"] = 1
+        data = await self.async_request(_DEVICE_DMY_HISTORY_PATH, body)
+        return data.get("result_data")
+
+    async def async_get_device_minute_history(
+        self,
+        ps_key: str,
+        *,
+        points: list[str],
+        start_time: str,
+        end_time: str,
+        minute_interval: int = 5,
+    ) -> Any:
+        """Return per-device minute-level history (``queryDevicePointMinuteDataList``, #98).
+
+        Posts the app's verified ``ps_key`` / ``points`` / ``start_time_stamp`` /
+        ``end_time_stamp`` / ``minute_interval`` shape. ``points`` are joined with commas
+        and sent verbatim (the caller supplies the exact point tokens). ``start_time`` /
+        ``end_time`` are ``"YYYYMMDDHHmmss"`` timestamp strings. Returns the raw
+        ``result_data`` value verbatim.
+
+        .. note::
+            The parameter names are verified against the app's ``HttpRequest.java``
+            builder; the exact ``points`` token format (whether a ``p``-prefix is required)
+            and the response shape are **unverified against a live device**.
+        """
+        body: dict[str, Any] = {
+            "ps_key": str(ps_key),
+            "points": ",".join(str(p) for p in points),
+            "start_time_stamp": str(start_time),
+            "end_time_stamp": str(end_time),
+            "minute_interval": str(minute_interval),
+        }
+        data = await self.async_request(_DEVICE_MINUTE_HISTORY_PATH, body)
+        return data.get("result_data")
