@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.15.2...v0.16.0) (2026-09-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* UserAuth.async_get_device_realtime now takes a device ps_key (from async_get_devices) as its single positional argument instead of (ps_id, device_sn), and returns data keyed by device uuid ({uuid: {point_id: {"id", "value", "unit", "name"}}}) instead of a flat {point_id: {"value", "unit"}} map. It now posts to queryDeviceRealTimeDataByPsKeys; the previous /v1/devService/queryDevice path did not exist in the app. Migrate by passing the device ps_key from async_get_devices and reading each device's points under its uuid.
+
+### Features
+
+* iSolarCloud app-parity user-account API (endpoint fixes + EV charger, battery, fault, energy & history reads) ([#99](https://github.com/KRoperUK/pysolarcloud/issues/99)) ([30d06b8](https://github.com/KRoperUK/pysolarcloud/commit/30d06b890d27f63c11eed9f26876d6ab8965a4d5))
+
 ## [0.15.2](https://github.com/KRoperUK/pysolarcloud/compare/v0.15.1...v0.15.2) (2026-09-15)
 
 
