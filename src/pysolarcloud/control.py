@@ -365,7 +365,14 @@ class Control:
     PARAMETER_SPECS: dict[str, dict[str, Any]] = _LEGACY_SPECS
 
     @classmethod
-    def encode_parameter(cls, name: str, value: object) -> str:
+    def encode_parameter(
+        cls,
+        name: str,
+        value: object,
+        *,
+        minimum: float | None = None,
+        maximum: float | None = None,
+    ) -> str:
         """Encode a human-friendly value into the raw string the API expects.
 
         For enum parameters ``value`` is an option name (e.g. ``"charge"``) or an
@@ -374,10 +381,20 @@ class Control:
         expects (see :attr:`PARAMETERS`). Parameters without a spec are returned
         as ``str(value)`` unchanged.
 
+        ``minimum`` / ``maximum`` override the spec's declared bounds for this call.
+        The spec bounds are a conservative, model-agnostic default; a caller that
+        knows the concrete per-device limit (e.g. the Home Assistant integration
+        resolving ``charge_discharge_power`` from the inverter's nameplate rating)
+        passes it here so a value the hardware supports is not rejected against a
+        one-size-fits-all ceiling — the motivating case being >5 kW inverters
+        capped at the 5000 W default (sungrow-hass #450 / #422). An override of
+        ``None`` leaves the corresponding spec bound in force; pass ``math.inf`` /
+        ``-math.inf`` to explicitly open a bound the spec closes. Ignored for enum
+        parameters.
+
         Raises:
             ValueError: for an unknown enum option, a non-numeric numeric value, or a
-                numeric value outside the parameter's declared ``minimum``/``maximum``
-                bounds.
+                numeric value outside the effective ``minimum``/``maximum`` bounds.
         """
         spec = cls.PARAMETERS.get(name)
         if spec is None:
@@ -394,10 +411,11 @@ class Control:
             numeric = float(value)  # type: ignore[arg-type]
         except (TypeError, ValueError) as err:
             raise ValueError(f"{name} expects a numeric value, got {value!r}") from err
-        # Enforce the declared display-unit bounds before scaling so an out-of-range
-        # value is never sent to hardware (#13). Bounds may be omitted or None (open-ended).
-        low = spec.minimum
-        high = spec.maximum
+        # Enforce the effective display-unit bounds before scaling so an out-of-range
+        # value is never sent to hardware (#13). A caller-supplied bound overrides the
+        # spec default (sungrow-hass #450); either may be None (open-ended).
+        low = spec.minimum if minimum is None else minimum
+        high = spec.maximum if maximum is None else maximum
         if (low is not None and numeric < low) or (high is not None and numeric > high):
             unit = spec.unit or ""
             low_str = "-inf" if low is None else f"{low}{unit}"
@@ -405,6 +423,20 @@ class Control:
             raise ValueError(f"{name} value {value!r} out of range [{low_str}, {high_str}]")
         return str(int(round(numeric * spec.scale)))
 
-    async def async_set_parameter(self, device_uuid: str, name: str, value: object) -> list[dict[str, Any]]:
-        """Encode ``value`` for ``name`` (see :meth:`encode_parameter`) and write it."""
-        return await self.async_update_parameters(device_uuid, {name: self.encode_parameter(name, value)})
+    async def async_set_parameter(
+        self,
+        device_uuid: str,
+        name: str,
+        value: object,
+        *,
+        minimum: float | None = None,
+        maximum: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Encode ``value`` for ``name`` (see :meth:`encode_parameter`) and write it.
+
+        ``minimum`` / ``maximum`` are forwarded to :meth:`encode_parameter` to
+        override the spec's default bounds for this write.
+        """
+        return await self.async_update_parameters(
+            device_uuid, {name: self.encode_parameter(name, value, minimum=minimum, maximum=maximum)}
+        )

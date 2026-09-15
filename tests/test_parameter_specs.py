@@ -108,6 +108,50 @@ async def test_async_set_parameter_encodes_then_writes():
     control.async_update_parameters.assert_awaited_once_with("dev-1", {"soc_upper_limit": "900"})
 
 
+# --- Per-device bound override (#450) -------------------------------------
+
+
+def test_caller_maximum_override_lifts_the_spec_ceiling():
+    # A >5 kW inverter (SH10RS) supports more than the 5000 W spec default. A caller
+    # that knows the nameplate rating passes it so the value is not wrongly rejected.
+    assert Control.encode_parameter("charge_discharge_power", 10000, maximum=10600) == "10000"
+    assert Control.encode_parameter("charge_discharge_power", 10600, maximum=10600) == "10600"
+    # The default (no override) still rejects the same value — bounds only widen per call.
+    with pytest.raises(ValueError, match="charge_discharge_power"):
+        Control.encode_parameter("charge_discharge_power", 10000)
+
+
+def test_caller_maximum_override_still_rejects_above_the_override():
+    with pytest.raises(ValueError, match=r"charge_discharge_power.*10600"):
+        Control.encode_parameter("charge_discharge_power", 11000, maximum=10600)
+
+
+def test_caller_can_tighten_bounds_below_the_spec():
+    # An override may also narrow a bound (e.g. a smaller inverter than the default).
+    with pytest.raises(ValueError, match="charge_discharge_power"):
+        Control.encode_parameter("charge_discharge_power", 4000, maximum=3600)
+    assert Control.encode_parameter("charge_discharge_power", 3600, maximum=3600) == "3600"
+
+
+def test_caller_minimum_override():
+    with pytest.raises(ValueError, match="charge_discharge_power"):
+        Control.encode_parameter("charge_discharge_power", 100, minimum=500)
+    assert Control.encode_parameter("charge_discharge_power", 500, minimum=500) == "500"
+
+
+def test_infinite_override_opens_the_bound():
+    import math
+
+    assert Control.encode_parameter("charge_discharge_power", 999999, maximum=math.inf) == "999999"
+
+
+async def test_async_set_parameter_forwards_bound_override():
+    control = Control(MagicMock())
+    control.async_update_parameters = AsyncMock(return_value=[])
+    await control.async_set_parameter("dev-1", "charge_discharge_power", 10000, maximum=10600)
+    control.async_update_parameters.assert_awaited_once_with("dev-1", {"charge_discharge_power": "10000"})
+
+
 # --- Reactive-power / power-factor control (Appendix 10) ---
 
 
