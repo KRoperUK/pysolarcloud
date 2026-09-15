@@ -808,3 +808,304 @@ async def test_get_soc_by_sn_empty_when_no_data():
     auth._post = AsyncMock(return_value={"result_msg": "success"})
 
     assert await auth.async_get_soc_by_sn("BT-SN-001") == {}
+
+
+# --- Fault / alarm reads (#96) ----------------------------------------------
+
+
+async def test_get_fault_count_sends_ps_id():
+    """async_get_fault_count posts ps_id to getDevFaultCountByPsId (#96)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"fault_count": 3}})
+
+    result = await auth.async_get_fault_count("123")
+
+    assert auth._post.call_args.args[0] == ua._FAULT_COUNT_BY_PS_PATH
+    assert auth._post.call_args.args[1]["ps_id"] == "123"
+    assert result["fault_count"] == 3
+
+
+async def test_get_fault_count_empty_when_no_data():
+    """A response without result_data yields an empty dict."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success"})
+
+    assert await auth.async_get_fault_count("123") == {}
+
+
+async def test_get_fault_detail_sends_fault_code():
+    """async_get_fault_detail posts fault_code to getFaultDetail (#96)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"fault_name": "Overvoltage"}})
+
+    result = await auth.async_get_fault_detail(101)
+
+    assert auth._post.call_args.args[0] == ua._FAULT_DETAIL_PATH
+    assert auth._post.call_args.args[1]["fault_code"] == "101"
+    assert result["fault_name"] == "Overvoltage"
+
+
+async def test_query_faults_returns_page_list_and_sends_defaults():
+    """async_query_faults returns the pageList and sends curPage/size defaults (#96)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={"result_msg": "success", "result_data": {"pageList": [{"fault_code": "1"}, {"fault_code": "2"}]}}
+    )
+
+    faults = await auth.async_query_faults("123")
+
+    assert auth._post.call_args.args[0] == ua._FAULT_LIST_PATH
+    body = auth._post.call_args.args[1]
+    assert body["ps_id"] == "123"
+    assert body["curPage"] == 1
+    assert body["size"] == 10
+    assert isinstance(body["curPage"], int)
+    assert [f["fault_code"] for f in faults] == ["1", "2"]
+
+
+async def test_query_faults_forwards_optional_filters_with_camelcase_times():
+    """Optional filters map onto the app's camelCase startTime/endTime params (#96)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"pageList": []}})
+
+    await auth.async_query_faults(
+        ps_key="k1",
+        uuid="dev-1",
+        process_status=1,
+        fault_type=2,
+        fault_type_code=3,
+        share_type="0,1,2",
+        start_time="20260101000000",
+        end_time="20260102000000",
+        sort_column="fault_time",
+        sort_type="desc",
+        fault_name_like="grid",
+        cur_page=2,
+        size=25,
+    )
+
+    body = auth._post.call_args.args[1]
+    assert body["ps_key"] == "k1"
+    assert body["uuid"] == "dev-1"
+    assert body["process_status"] == "1"
+    assert body["fault_type"] == "2"
+    assert body["fault_type_code"] == "3"
+    assert body["share_type"] == "0,1,2"
+    assert body["startTime"] == "20260101000000"
+    assert body["endTime"] == "20260102000000"
+    assert body["sort_column"] == "fault_time"
+    assert body["sort_type"] == "desc"
+    assert body["fault_name_like"] == "grid"
+    assert body["curPage"] == 2
+    assert body["size"] == 25
+    # ps_id must not be sent when it isn't supplied.
+    assert "ps_id" not in body
+
+
+async def test_query_faults_accepts_bare_list_and_empty():
+    """A bare list result is returned as-is; a missing result yields []."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": [{"fault_code": "9"}]})
+    assert await auth.async_query_faults("1") == [{"fault_code": "9"}]
+
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+    assert await auth.async_query_faults("1") == []
+
+
+async def test_get_open_fault_num_sends_constant_share_type():
+    """async_get_open_fault_num sends the app's constant share_type=0,1,2 (#96)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"open_num": 4}})
+
+    result = await auth.async_get_open_fault_num()
+
+    assert auth._post.call_args.args[0] == ua._PS_OPEN_FAULT_NUM_PATH
+    assert auth._post.call_args.args[1]["share_type"] == "0,1,2"
+    assert result["open_num"] == 4
+
+
+async def test_get_unread_fault_count_forwards_supplied_params_only():
+    """async_get_unread_fault_count sends only the supplied type/ps_id/uuid params (#96)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"count": 2}})
+
+    result = await auth.async_get_unread_fault_count(type="3", ps_id="123")
+
+    assert auth._post.call_args.args[0] == ua._NOT_READ_FAULT_COUNT_PATH
+    body = auth._post.call_args.args[1]
+    assert body["type"] == "3"
+    assert body["ps_id"] == "123"
+    assert "uuid" not in body
+    assert result["count"] == 2
+
+
+async def test_get_unread_fault_count_forwards_uuid():
+    """The uuid param is forwarded when supplied (#96)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    await auth.async_get_unread_fault_count(type="3", uuid="dev-9")
+
+    body = auth._post.call_args.args[1]
+    assert body["uuid"] == "dev-9"
+    assert "ps_id" not in body
+
+
+# --- Aggregate energy / report reads (#97) ----------------------------------
+
+
+async def test_get_household_storage_report_sends_ps_id_and_version_tag():
+    """async_get_household_storage_report sends ps_id + version_tag=1 by default (#97)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"total": "12.3"}})
+
+    result = await auth.async_get_household_storage_report("123")
+
+    assert auth._post.call_args.args[0] == ua._HOUSEHOLD_STORAGE_REPORT_PATH
+    body = auth._post.call_args.args[1]
+    assert body["ps_id"] == "123"
+    assert body["version_tag"] == "1"
+    assert "date_type" not in body
+    assert "date_id" not in body
+    assert "minute_interval" not in body
+    assert result["total"] == "12.3"
+
+
+async def test_get_household_storage_report_forwards_optional_params():
+    """date_type, date_id and minute_interval are forwarded (stringified) when supplied (#97)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    await auth.async_get_household_storage_report("123", date_type=2, date_id="202601", minute_interval=15)
+
+    body = auth._post.call_args.args[1]
+    assert body["date_type"] == "2"
+    assert body["date_id"] == "202601"
+    assert body["minute_interval"] == "15"
+
+
+async def test_get_energy_summary_sends_ps_id_and_optional_params():
+    """async_get_energy_summary posts ps_id and optional date params to getPsEnergySummaryInfo (#97)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"today_energy": "9.1"}})
+
+    result = await auth.async_get_energy_summary("123", date_type=1, date_id="20260718")
+
+    assert auth._post.call_args.args[0] == ua._PS_ENERGY_SUMMARY_PATH
+    body = auth._post.call_args.args[1]
+    assert body["ps_id"] == "123"
+    assert body["date_type"] == "1"
+    assert body["date_id"] == "20260718"
+    assert result["today_energy"] == "9.1"
+
+
+async def test_get_energy_summary_empty_when_no_data():
+    """A response without result_data yields an empty dict, and no date params are sent."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success"})
+
+    assert await auth.async_get_energy_summary("123") == {}
+    body = auth._post.call_args.args[1]
+    assert "date_type" not in body
+    assert "date_id" not in body
+
+
+# --- Per-device day/month/year & minute history reads (#98) -----------------
+
+
+async def test_get_device_day_month_year_history_sends_ps_key_only_by_default():
+    """async_get_device_day_month_year_history sends ps_key alone by default (#98)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": [{"time": "20260101"}]})
+
+    result = await auth.async_get_device_day_month_year_history("dev-key-1")
+
+    assert auth._post.call_args.args[0] == ua._DEVICE_DMY_HISTORY_PATH
+    body = auth._post.call_args.args[1]
+    assert body["ps_key"] == "dev-key-1"
+    assert "data_point" not in body
+    assert "is_get_point_info" not in body
+    # The raw result_data is returned verbatim (shape unverified).
+    assert result == [{"time": "20260101"}]
+
+
+async def test_get_device_day_month_year_history_forwards_all_params():
+    """All optional params (incl. is_get_point_info=1) are forwarded when supplied (#98)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    await auth.async_get_device_day_month_year_history(
+        "k",
+        data_point="p1,p2",
+        start_time="20260101",
+        end_time="20261231",
+        data_type=2,
+        order=1,
+        query_type=3,
+        is_get_point_info=True,
+    )
+
+    body = auth._post.call_args.args[1]
+    assert body["data_point"] == "p1,p2"
+    assert body["start_time"] == "20260101"
+    assert body["end_time"] == "20261231"
+    assert body["data_type"] == "2"
+    assert body["order"] == "1"
+    assert body["query_type"] == "3"
+    assert body["is_get_point_info"] == 1
+
+
+async def test_get_device_minute_history_sends_verified_shape():
+    """async_get_device_minute_history posts the verified ps_key/points/timestamp shape (#98)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={"result_msg": "success", "result_data": [{"time_stamp": "20260718000000", "p1": "5"}]}
+    )
+
+    result = await auth.async_get_device_minute_history(
+        "k",
+        points=["p13003", "p13004"],
+        start_time="20260718000000",
+        end_time="20260718010000",
+    )
+
+    assert auth._post.call_args.args[0] == ua._DEVICE_MINUTE_HISTORY_PATH
+    body = auth._post.call_args.args[1]
+    assert body["ps_key"] == "k"
+    assert body["points"] == "p13003,p13004"
+    assert body["start_time_stamp"] == "20260718000000"
+    assert body["end_time_stamp"] == "20260718010000"
+    assert body["minute_interval"] == "5"
+    assert result == [{"time_stamp": "20260718000000", "p1": "5"}]
