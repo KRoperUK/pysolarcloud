@@ -69,6 +69,29 @@ async def test_post_encrypts_and_decrypts_round_trip(monkeypatch):
     assert headers["x-random-secret-key"]  # RSA-encrypted AES key present
 
 
+async def test_post_uses_custom_sys_code(monkeypatch):
+    """A sys_code kwarg overrides the default web value on the wire (#91)."""
+    fixed_key = "web0123456789abc"
+    monkeypatch.setattr(ua, "_random_aes_key", lambda: fixed_key)
+
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.text = AsyncMock(return_value=ua._aes_encrypt({"result_msg": "success"}, fixed_key))
+    session = MagicMock()
+    session.request = AsyncMock(return_value=resp)
+
+    auth = UserAuth(Server.Europe, "me@example.com", "secret", websession=session, sys_code="900")
+    assert auth.sys_code == "900"
+    await auth._post("/v1/userService/login", {"user_account": "x"}, user_id="")
+
+    assert session.request.call_args.kwargs["headers"]["sys_code"] == "900"
+
+
+def test_default_sys_code_is_web():
+    """The default sys_code is the web client value '200' (#91)."""
+    assert _auth().sys_code == ua.SYS_CODE == "200"
+
+
 # --- login / token ----------------------------------------------------------
 
 
@@ -233,8 +256,8 @@ async def test_get_plants_empty_when_no_page_list():
     assert await auth.async_get_plants() == []
 
 
-async def test_get_plant_detail_returns_result_data():
-    """async_get_plant_detail returns the plant's result_data payload (#269)."""
+async def test_get_plant_detail_uses_get_ps_detail_with_ps_type(monkeypatch):
+    """async_get_plant_detail posts the getPsDetailWithPsType household params (#90)."""
     auth = _auth()
     auth.token = "T"
     auth.user_id = "42"
@@ -247,9 +270,41 @@ async def test_get_plant_detail_returns_result_data():
 
     detail = await auth.async_get_plant_detail(5)
 
-    # ps_id is forwarded in the request body, and the raw result_data comes back.
-    assert auth._post.call_args.args[1]["ps_id"] == "5"
+    path = auth._post.call_args.args[0]
+    body = auth._post.call_args.args[1]
+    assert path == ua._PLANT_DETAIL_WITH_TYPE_PATH
+    assert body["ps_id"] == "5"
+    assert body["is_get_ps_level_data"] == "1"
+    assert body["version_tag"] == "1"
+    assert body["is_shut_down_flag"] == "1"
+    assert body["is_get_hm_info"] == "1"
+    # valid_flag was a getPsList param and must no longer be sent.
+    assert "valid_flag" not in body
     assert detail["curr_power"] == {"value": "3200", "unit": "W"}
+
+
+async def test_get_plant_detail_adds_func_code_for_non_china():
+    """A non-China region mirrors getPsDetailOversea and adds func_code=5 (#90)."""
+    auth = _auth()  # Server.Europe
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    await auth.async_get_plant_detail(5)
+
+    assert auth._post.call_args.args[1]["func_code"] == "5"
+
+
+async def test_get_plant_detail_omits_func_code_for_china():
+    """China uses the domestic variant, which omits func_code (#90)."""
+    auth = UserAuth(Server.China, "me@example.com", "secret", websession=MagicMock())
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    await auth.async_get_plant_detail(5)
+
+    assert "func_code" not in auth._post.call_args.args[1]
 
 
 async def test_get_plant_detail_empty_when_no_data():
@@ -260,6 +315,24 @@ async def test_get_plant_detail_empty_when_no_data():
     auth._post = AsyncMock(return_value={"result_msg": "success"})
 
     assert await auth.async_get_plant_detail(5) == {}
+
+
+async def test_get_plant_detail_daily_uses_get_ps_detail():
+    """async_get_plant_detail_daily posts getPsDetail with ps_id + date_id (#90)."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {"day_power": "12"}})
+
+    detail = await auth.async_get_plant_detail_daily(5, "20260718")
+
+    path = auth._post.call_args.args[0]
+    body = auth._post.call_args.args[1]
+    assert path == ua._PLANT_DETAIL_PATH
+    assert body["ps_id"] == "5"
+    assert body["date_id"] == "20260718"
+    assert "valid_flag" not in body
+    assert detail["day_power"] == "12"
 
 
 # --- session lifecycle ------------------------------------------------------
@@ -320,39 +393,125 @@ async def test_get_devices_empty_when_no_devices():
     assert await auth.async_get_devices("123") == []
 
 
-# --- async_get_device_realtime (#53) ----------------------------------------
+# --- async_get_device_realtime (#89) ----------------------------------------
 
 
-async def test_get_device_realtime_returns_result_data():
-    """async_get_device_realtime returns the per-device point data."""
+async def test_get_device_realtime_uses_ps_keys_path_and_shape():
+    """async_get_device_realtime posts ps_key_list to queryDeviceRealTimeDataByPsKeys (#89)."""
     auth = _auth()
     auth.token = "T"
     auth.user_id = "42"
     auth._post = AsyncMock(
         return_value={
             "result_msg": "success",
-            "result_data": {"13003": {"value": "240.5", "unit": "V"}, "13004": {"value": "1.2", "unit": "A"}},
+            "result_data": {
+                "point_dict": [
+                    {"point_id": "13003", "point_unit": "V", "point_name": "Phase A Voltage"},
+                ],
+                "device_point_list": [
+                    {"device_point": {"uuid": "dev-1", "p13003": "240.5", "p13004": "1.2"}},
+                ],
+            },
         }
     )
 
-    result = await auth.async_get_device_realtime("123", "SN123456")
+    result = await auth.async_get_device_realtime("dev-key-1")
 
-    assert result["13003"] == {"value": "240.5", "unit": "V"}
+    path = auth._post.call_args.args[0]
     body = auth._post.call_args.args[1]
-    assert body["sn"] == "SN123456"
+    assert path == ua._DEVICE_REALTIME_PATH
+    assert body["ps_key_list"] == ["dev-key-1"]
+    assert body["is_get_point_dict"] == "1"
+    # Result is keyed by device uuid, with per-point {id, value, unit, name}.
+    assert result["dev-1"]["13003"] == {
+        "id": "13003",
+        "value": 240.5,
+        "unit": "V",
+        "name": "Phase A Voltage",
+    }
+    # A point missing from point_dict still comes back, numeric-coerced, unit/name None.
+    assert result["dev-1"]["13004"] == {"id": "13004", "value": 1.2, "unit": None, "name": None}
 
 
-async def test_get_device_realtime_with_point_ids():
-    """When point_ids is specified, they are passed as a comma-separated points field."""
+async def test_get_device_realtime_accepts_ps_key_list_and_point_ids():
+    """A list of ps_keys and explicit point_ids are forwarded as-is (#89)."""
     auth = _auth()
     auth.token = "T"
     auth.user_id = "42"
     auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
 
-    await auth.async_get_device_realtime("123", "SN1", point_ids=["13003", "13004"])
+    await auth.async_get_device_realtime(["k1", "k2"], point_ids=["13003", "13004"])
 
     body = auth._post.call_args.args[1]
-    assert body["points"] == "13003,13004"
+    assert body["ps_key_list"] == ["k1", "k2"]
+    assert body["point_id_list"] == ["13003", "13004"]
+
+
+async def test_get_device_realtime_top_level_device_fields():
+    """Devices whose p<id> fields sit at the top level (no device_point wrapper) parse too."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={
+            "result_msg": "success",
+            "result_data": {
+                "device_point_list": [{"uuid": "dev-2", "p13003": "230"}],
+            },
+        }
+    )
+
+    result = await auth.async_get_device_realtime("k")
+
+    assert result["dev-2"]["13003"]["value"] == 230.0
+
+
+async def test_get_device_realtime_skips_entries_without_uuid():
+    """Entries with no uuid/device_id are skipped rather than keyed under an empty string."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={
+            "result_msg": "success",
+            "result_data": {"device_point_list": [{"p13003": "1"}]},
+        }
+    )
+
+    assert await auth.async_get_device_realtime("k") == {}
+
+
+async def test_get_device_realtime_empty_when_no_data():
+    """An empty response returns an empty dict."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_msg": "success", "result_data": {}})
+
+    assert await auth.async_get_device_realtime("k") == {}
+
+
+async def test_get_device_realtime_non_numeric_value_and_non_dict_entry():
+    """Non-numeric point values pass through unchanged; non-dict list entries are skipped."""
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(
+        return_value={
+            "result_msg": "success",
+            "result_data": {
+                "device_point_list": [
+                    "not-a-dict",
+                    {"device_point": {"uuid": "dev-3", "p13010": "Running"}},
+                ]
+            },
+        }
+    )
+
+    result = await auth.async_get_device_realtime("k")
+
+    # The bare string entry is ignored, and a non-numeric value is kept verbatim.
+    assert result == {"dev-3": {"13010": {"id": "13010", "value": "Running", "unit": None, "name": None}}}
 
 
 # --- async_get_historical_data (#53) ----------------------------------------

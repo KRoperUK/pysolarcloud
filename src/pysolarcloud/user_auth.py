@@ -68,9 +68,14 @@ PUBLIC_KEY_PEM = (
 
 _LOGIN_PATH = "/v1/userService/login"
 _PLANT_LIST_PATH = "/v1/powerStationService/getPsList"
+# Daily-detail path (``getPsDetail(ps_id, date_id)`` in the app's HttpRequest.java).
 _PLANT_DETAIL_PATH = "/v1/powerStationService/getPsDetail"
+# Realtime household view path (``getPsDetailBalcony``/``getPsDetailOversea`` in the app).
+_PLANT_DETAIL_WITH_TYPE_PATH = "/v1/powerStationService/getPsDetailWithPsType"
 _DEVICE_LIST_PATH = "/v1/devService/queryDeviceList"
-_DEVICE_REALTIME_PATH = "/v1/devService/queryDevice"
+# Per-device realtime, keyed by ``ps_key`` (the app's canonical path; #89). The old
+# ``/v1/devService/queryDevice`` this replaced does not exist in the app.
+_DEVICE_REALTIME_PATH = "/v1/devService/queryDeviceRealTimeDataByPsKeys"
 _HISTORICAL_DATA_PATH = "/v1/commonService/queryMutiPointDataList"
 
 # Documented result codes meaning the session/login is invalid → re-login (Appendix 2).
@@ -146,12 +151,18 @@ class UserAuth:
         app_key: str = APP_KEY,
         access_key: str = ACCESS_KEY,
         public_key_pem: str = PUBLIC_KEY_PEM,
+        sys_code: str = SYS_CODE,
         lang: str = "_en_US",
     ) -> None:
         """Initialise the user-account auth.
 
         If ``websession`` is not supplied, an owned session with a request timeout is
         created and closed by :meth:`async_close` / ``async with`` exit.
+
+        ``sys_code`` selects the client surface the ``sys_code`` header advertises:
+        ``"200"`` (the default) is the **web** client; the phone app sends ``"900"``.
+        Both are accepted, but the two surfaces can return different field sets, so pass
+        ``sys_code="900"`` to request the app surface (#91).
         """
         self.host = host.value if isinstance(host, Server) else host
         self._email = email
@@ -159,6 +170,7 @@ class UserAuth:
         self.app_key = app_key
         self.access_key = access_key
         self.public_key_pem = public_key_pem
+        self.sys_code = sys_code
         self.lang = lang
         self._owns_session = websession is None
         if websession is None:
@@ -192,7 +204,7 @@ class UserAuth:
         key = _random_aes_key()
         headers = {
             "content-type": "application/json;charset=UTF-8",
-            "sys_code": SYS_CODE,
+            "sys_code": self.sys_code,
             "x-access-key": self.access_key,
             "x-random-secret-key": _rsa_encrypt(key, self.public_key_pem),
             "x-limit-obj": _rsa_encrypt(user_id, self.public_key_pem),
@@ -286,14 +298,43 @@ class UserAuth:
         return list(page_list) if isinstance(page_list, list) else []
 
     async def async_get_plant_detail(self, ps_id: str | int) -> dict[str, Any]:
-        """Return a plant's detail/realtime payload (``getPsDetail``), for the app/web API.
+        """Return a plant's realtime household detail payload, for the app/web API (#90).
+
+        Posts to ``getPsDetailWithPsType`` — the path the app's realtime household
+        dashboard (``getPsDetailBalcony`` / ``getPsDetailOversea``) actually uses — with
+        ``is_get_ps_level_data=1``, ``version_tag=1``, ``is_shut_down_flag=1`` and
+        ``is_get_hm_info=1``. Non-China regions additionally send ``func_code=5`` (the
+        ``getPsDetailOversea`` variant). This replaces the previous ``getPsDetail`` call
+        that mis-sent ``valid_flag`` (a ``getPsList`` parameter), the likely cause of the
+        unit-less realtime fields consumers had to work around.
 
         Returns the raw ``result_data`` dict (e.g. ``curr_power`` and other plant-level
         fields). The exact field set is model/region-dependent; consumers map it onto the
-        measure-point model (KRoperUK/sungrow-hass#269). ``valid_flag`` mirrors the
-        reference client.
+        measure-point model (KRoperUK/sungrow-hass#269).
         """
-        data = await self.async_request(_PLANT_DETAIL_PATH, {"ps_id": str(ps_id), "valid_flag": "1,3"})
+        body: dict[str, Any] = {
+            "ps_id": str(ps_id),
+            "is_get_ps_level_data": "1",
+            "version_tag": "1",
+            "is_shut_down_flag": "1",
+            "is_get_hm_info": "1",
+        }
+        # China (``gateway.isolarcloud.com``) uses the domestic variant, which omits
+        # ``func_code``; every other region mirrors ``getPsDetailOversea`` and adds
+        # ``func_code=5``.
+        if self.host != Server.China.value:
+            body["func_code"] = "5"
+        data = await self.async_request(_PLANT_DETAIL_WITH_TYPE_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_get_plant_detail_daily(self, ps_id: str | int, date_id: str) -> dict[str, Any]:
+        """Return a plant's daily-detail payload via ``getPsDetail(ps_id, date_id)`` (#90).
+
+        The app's ``getPsDetail`` builder takes ``ps_id`` plus a ``date_id`` (``YYYYMMDD``)
+        and serves the daily/history detail view — distinct from the realtime household
+        view :meth:`async_get_plant_detail` now uses. Returns the raw ``result_data`` dict.
+        """
+        data = await self.async_request(_PLANT_DETAIL_PATH, {"ps_id": str(ps_id), "date_id": str(date_id)})
         return dict(data.get("result_data") or {})
 
     async def async_get_devices(self, ps_id: str | int) -> list[dict[str, Any]]:
@@ -314,18 +355,78 @@ class UserAuth:
         return []
 
     async def async_get_device_realtime(
-        self, ps_id: str | int, device_sn: str, *, point_ids: list[str] | None = None
-    ) -> dict[str, Any]:
-        """Return per-device realtime data for a specific device (by serial number, #53).
+        self, ps_key: str | list[str], *, point_ids: list[str] | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Return per-device realtime data keyed by device uuid (#89).
 
-        Returns a dict of ``{point_id: {value, unit}}`` pairs for the device. If
-        ``point_ids`` is None, all available points are returned.
+        Posts to ``queryDeviceRealTimeDataByPsKeys`` — the app's canonical per-device
+        realtime path, keyed by ``ps_key`` — using the app's request shape
+        ``{ps_key_list, point_id_list, is_get_point_dict}``. This replaces the previous
+        ``{ps_id, sn, points}`` call to ``/v1/devService/queryDevice``, a path that does
+        not exist in the app.
+
+        ``ps_key`` is a single device ``ps_key`` (from :meth:`async_get_devices`) or a
+        list of them. ``point_ids`` optionally restricts the points requested; when
+        omitted the server returns its default set.
+
+        Returns ``{uuid: {point_id: {"id", "value", "unit", "name"}}}``, mirroring the
+        ``point_dict`` / ``device_point`` / ``p<id>`` parsing of
+        :meth:`Plants.async_get_device_realtime`.
+
+        .. note::
+            The app registers this path in ``AppUrlPath.java`` but builds its body
+            dynamically, so the exact request field names (``ps_key_list``,
+            ``point_id_list``, ``is_get_point_dict``) are taken from the sibling OpenAPI
+            ``getDeviceRealTimeData`` shape rather than a named app builder, and are
+            **unverified against a live device**.
         """
-        body: dict[str, Any] = {"ps_id": str(ps_id), "sn": device_sn}
+        ps_key_list = [ps_key] if isinstance(ps_key, str) else [str(k) for k in ps_key]
+        body: dict[str, Any] = {"ps_key_list": ps_key_list, "is_get_point_dict": "1"}
         if point_ids:
-            body["points"] = ",".join(point_ids)
+            body["point_id_list"] = [str(pid) for pid in point_ids]
         data = await self.async_request(_DEVICE_REALTIME_PATH, body)
-        return dict(data.get("result_data") or {})
+        result = data.get("result_data") or {}
+        point_dict_items = result.get("point_dict") or []
+        point_dict = {str(p["point_id"]): p for p in point_dict_items if isinstance(p, dict) and "point_id" in p}
+        out: dict[str, dict[str, Any]] = {}
+        device_list = result.get("device_point_list") or []
+        for entry in device_list:
+            # getDeviceRealTimeData-style responses nest the device fields (uuid + p<id>
+            # values) under a "device_point" key; others put them at the top level.
+            device = entry.get("device_point", entry) if isinstance(entry, dict) else entry
+            if not isinstance(device, dict):
+                continue
+            uuid = str(device.get("uuid") or device.get("device_id") or "")
+            if not uuid:
+                continue
+            points = {
+                k[1:]: self._format_point(k[1:], v, point_dict)
+                for k, v in device.items()
+                if k[0] == "p" and k[1:].isdigit()
+            }
+            out.setdefault(uuid, {}).update(points)
+        return out
+
+    @staticmethod
+    def _format_point(point_id: str, point_value: Any, point_dict: dict[str, Any]) -> dict[str, Any]:
+        """Normalise a single ``p<id>`` value into ``{id, value, unit, name}``.
+
+        Mirrors :meth:`Plants._format_measure_point` minus the code map (the user API has
+        no static measure-point name table), coercing numeric strings to ``float`` and
+        pulling ``point_unit`` / ``point_name`` from the response ``point_dict``.
+        """
+        v: float | str | None
+        try:
+            v = float(point_value) if point_value is not None else None
+        except (TypeError, ValueError):
+            v = point_value
+        meta = point_dict.get(point_id, {})
+        return {
+            "id": point_id,
+            "value": v,
+            "unit": meta.get("point_unit"),
+            "name": meta.get("point_name"),
+        }
 
     async def async_get_historical_data(
         self,
