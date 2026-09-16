@@ -984,6 +984,168 @@ async def test_set_system_power_backup_param_sends_config_map():
     assert result == {"ok": True}
 
 
+# --- app-native param-set flow (#92) ----------------------------------------
+
+
+async def test_check_can_set_parameters_sends_uuids_and_check_type():
+    """async_check_can_set_parameters posts uuid_list + check_type (#92)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {"check_result": "1"}})
+
+    result = await auth.async_check_can_set_parameters(["dev-1", 42])
+
+    body = auth._post.call_args.args[1]
+    assert auth._post.call_args.args[0] == ua._CHECK_CAN_PARAM_SET_PATH
+    assert body["uuid_list"] == ["dev-1", "42"]
+    assert body["check_type"] == "0"
+    assert "is_communication_dev_param_set" not in body
+    assert result == {"check_result": "1"}
+
+
+async def test_check_can_set_parameters_passes_check_type_and_comm_flag():
+    """check_type is passed through and the communication flag is opt-in (#92)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {}})
+
+    await auth.async_check_can_set_parameters(["dev-1"], check_type="2", communication_device=True)
+
+    body = auth._post.call_args.args[1]
+    assert body["check_type"] == "2"
+    assert body["is_communication_dev_param_set"] == "1"
+
+
+async def test_get_param_set_template_sends_app_defaults_only():
+    """The template call sends the app's defaults and omits unset variant fields (#92)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {"point_list": []}})
+
+    result = await auth.async_get_param_set_template_point_info(["dev-1"])
+
+    body = auth._post.call_args.args[1]
+    assert auth._post.call_args.args[0] == ua._PARAM_SET_TEMPLATE_PATH
+    assert body["uuid_list"] == ["dev-1"]
+    assert body["set_type"] == "0"
+    assert body["template_type"] == "1"
+    for omitted in ("ps_id", "country_id", "grid_company", "grid_type", "check_country"):
+        assert omitted not in body
+    assert result == {"point_list": []}
+
+
+async def test_get_param_set_template_includes_grid_variant_fields():
+    """Grid-template fields are sent only when supplied, coerced to strings (#92)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {}})
+
+    await auth.async_get_param_set_template_point_info(
+        ["dev-1"],
+        ps_id="123",
+        country_id=42,
+        grid_company="ACME Grid",
+        grid_type="1",
+        check_country="DE",
+    )
+
+    body = auth._post.call_args.args[1]
+    assert body["ps_id"] == "123"
+    assert body["country_id"] == "42"
+    assert body["grid_company"] == "ACME Grid"
+    assert body["grid_type"] == "1"
+    assert body["check_country"] == "DE"
+
+
+async def test_issue_parameter_instruction_sends_verified_field_names():
+    """async_issue_parameter_instruction mirrors paramSetIssueInstruction (#92)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {"task_id": "T1"}})
+
+    result = await auth.async_issue_parameter_instruction(
+        "123",
+        ["dev-1"],
+        device_type="14",
+        task_name="Fast setting",
+        expire_second="120",
+        set_type="0",
+        scenario="5",
+        energy_management={"work_mode": {"key": "self_consumption"}},
+        power_control={"self_work_mode": "1"},
+    )
+
+    body = auth._post.call_args.args[1]
+    assert auth._post.call_args.args[0] == ua._PARAM_SET_INSTRUCTION_PATH
+    assert body["ps_id"] == "123"
+    assert body["uuid_list"] == ["dev-1"]
+    assert body["device_type"] == "14"
+    assert body["task_name"] == "Fast setting"
+    assert body["expire_second"] == "120"
+    assert body["set_type"] == "0"
+    assert body["scenario"] == "5"
+    # The structured objects are passed through verbatim.
+    assert body["energy_management"] == {"work_mode": {"key": "self_consumption"}}
+    assert body["power_control"] == {"self_work_mode": "1"}
+    assert result == {"task_id": "T1"}
+
+
+async def test_issue_parameter_instruction_omits_absent_objects():
+    """Unset energy_management / power_control are left out of the request (#92)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {}})
+
+    await auth.async_issue_parameter_instruction(
+        "123", ["dev-1"], device_type="14", task_name="t", expire_second="120", set_type="0", scenario="5"
+    )
+
+    body = auth._post.call_args.args[1]
+    assert "energy_management" not in body
+    assert "power_control" not in body
+
+
+async def test_get_back_read_value_sends_set_id_and_optionals():
+    """async_get_back_read_value posts task_id + uuid, and setId when given (#92)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {"value": "1"}})
+
+    result = await auth.async_get_back_read_value(
+        "T1", "dev-1", template_type="1", is_get_device_shadow="1", set_id="S9"
+    )
+
+    body = auth._post.call_args.args[1]
+    assert auth._post.call_args.args[0] == ua._PARAM_SET_READBACK_PATH
+    assert body["task_id"] == "T1"
+    assert body["uuid"] == "dev-1"
+    assert body["template_type"] == "1"
+    assert body["is_get_device_shadow"] == "1"
+    assert body["setId"] == "S9"
+    assert result == {"value": "1"}
+
+
+async def test_get_back_read_value_minimal_body():
+    """Without optionals only task_id + uuid are sent (#92)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {}})
+
+    await auth.async_get_back_read_value(1, 2)
+
+    body = auth._post.call_args.args[1]
+    assert body["task_id"] == "1"
+    assert body["uuid"] == "2"
+    assert "template_type" not in body
+    assert "is_get_device_shadow" not in body
+    assert "setId" not in body
+
+
+async def test_cancel_fast_setting_task_omits_empty_task_id():
+    """async_cancel_fast_setting_task sends ps_id alone when no task is given (#92)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {}})
+
+    await auth.async_cancel_fast_setting_task("123")
+
+    body = auth._post.call_args.args[1]
+    assert auth._post.call_args.args[0] == ua._CANCEL_FAST_SETTING_PATH
+    assert body["ps_id"] == "123"
+    assert "task_id" not in body
+
+
+async def test_cancel_fast_setting_task_includes_task_id_when_given():
+    """A supplied task_id is included in the cancel request (#92)."""
+    auth = _auth_with_post({"result_msg": "success", "result_data": {}})
+
+    await auth.async_cancel_fast_setting_task("123", task_id="T1")
+
+    assert auth._post.call_args.args[1]["task_id"] == "T1"
+
+
 async def test_get_fault_detail_sends_fault_code():
     """async_get_fault_detail posts fault_code to getFaultDetail (#96)."""
     auth = _auth()
