@@ -132,6 +132,18 @@ _DISCHARGE_PLAN_SELECT_PATH = "/v1/devService/selectDischargePlan"
 _DISCHARGE_TEMPLATE_PATH = "/v1/devService/getDischargeTemplateInfo"
 _SYS_POWER_BACKUP_PATH = "/v1/devService/setSysPowerBackupParam"
 
+# --- App-native param-set flow (#92) -------------------------------------
+#
+# The app's own control chain, as an alternative to the ``/openapi/paramSetting``
+# path :class:`~pysolarcloud.user_control.UserControl` drives: gate the device, ask
+# which points are settable, issue the write as structured objects, then read back
+# or cancel. Verified against the app's ``HttpRequest.java``.
+_CHECK_CAN_PARAM_SET_PATH = "/v1/devService/checkIsCanDoParamSet"
+_PARAM_SET_TEMPLATE_PATH = "/v1/devService/getParamSetTemplatePointInfo"
+_PARAM_SET_INSTRUCTION_PATH = "/v1/devService/paramSetIssueInstruction"
+_PARAM_SET_READBACK_PATH = "/v1/devService/getBackReadValue"
+_CANCEL_FAST_SETTING_PATH = "/v1/devService/cancelFastSettingTask"
+
 # Documented result codes meaning the session/login is invalid → re-login (Appendix 2).
 _LOGIN_INVALID_CODES = frozenset({"E00003", "1"})
 
@@ -1072,4 +1084,207 @@ class UserAuth:
             "config": config,
         }
         data = await self.async_request(_SYS_POWER_BACKUP_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    # --- App-native param-set flow (#92) ------------------------------------
+    #
+    # The app writes parameters through its own chain rather than the flat
+    # ``param_list[{param_code, set_value}]`` that
+    # :meth:`UserControl.async_update_parameters` sends to ``/openapi/paramSetting``:
+    #
+    #   checkIsCanDoParamSet         → may this device be written at all?
+    #   getParamSetTemplatePointInfo → which points, with their ranges/enums?
+    #   paramSetIssueInstruction     → the write, as structured objects + a scenario
+    #   getBackReadValue             → poll for completion / read the value back
+    #   cancelFastSettingTask        → abort
+    #
+    # Method names, paths and request **field names** are verified against the app's
+    # ``HttpRequest.java``. The **values** are not: which ``check_type`` / ``set_type`` /
+    # ``scenario`` codes and which ``energy_management`` / ``power_control`` contents a
+    # given device accepts come from the app's own UI state and are **unverified against
+    # a live device**, so they are passed through verbatim rather than guessed at.
+    # Response shapes are likewise unverified.
+    #
+    # Scope note: the app's ``getTaskStatusAndPointValue`` builder is MLPE-specific — it
+    # hardcodes ``mlpe_pointList="68423"`` and takes ``mlpe_task_id`` — so it is not
+    # exposed here; :meth:`async_get_back_read_value` is the general read-back.
+
+    async def async_check_can_set_parameters(
+        self,
+        uuid_list: list[str | int],
+        *,
+        check_type: str | int = "0",
+        communication_device: bool = False,
+    ) -> dict[str, Any]:
+        """Ask whether the devices accept parameter writes (``checkIsCanDoParamSet``, #92).
+
+        ``check_type`` is passed through verbatim — the app sends ``"0"`` for the write
+        check (and a different value for read-back), but the accepted codes are
+        **unverified**. Set ``communication_device`` to add the app's
+        ``is_communication_dev_param_set="1"`` flag, which its WiNet/logger screens send.
+
+        Returns the raw ``result_data`` dict, which carries the per-device
+        ``check_result`` the app gates on.
+        """
+        body: dict[str, Any] = {
+            "uuid_list": [str(uuid) for uuid in uuid_list],
+            "check_type": str(check_type),
+        }
+        if communication_device:
+            body["is_communication_dev_param_set"] = "1"
+        data = await self.async_request(_CHECK_CAN_PARAM_SET_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_get_param_set_template_point_info(
+        self,
+        uuid_list: list[str | int],
+        *,
+        set_type: str | int = "0",
+        template_type: str | int = "1",
+        ps_id: str | int | None = None,
+        is_need_master_node: str | int | None = None,
+        is_mlpe: str | int | None = None,
+        is_communication_dev_param_set: str | int | None = None,
+        country_id: str | int | None = None,
+        grid_company: str | None = None,
+        grid_type: str | int | None = None,
+        version: str | None = None,
+        mdsp_version: str | None = None,
+        sdsp_version: str | None = None,
+        check_country: str | None = None,
+        is_support_au_grid_type: str | int | None = None,
+    ) -> dict[str, Any]:
+        """Return the settable point template for a device (``getParamSetTemplatePointInfo``, #92).
+
+        This is the app's real per-device capability query, and the main reason it is
+        worth having: the response carries the settable points with their names, ranges
+        and enum options, so a consumer can discover what a device accepts instead of
+        mirroring per-model capability tables.
+
+        The app has several variants of this request, and which fields matter depends on
+        the device and region — its MLPE/communication screen adds ``ps_id`` /
+        ``is_need_master_node`` / ``is_mlpe`` / ``is_communication_dev_param_set``, while
+        its grid-template screen sends ``country_id`` / ``grid_company`` / ``grid_type`` /
+        ``version`` / ``mdsp_version`` / ``sdsp_version`` / ``check_country`` /
+        ``is_support_au_grid_type``. The defaults mirror the app (``set_type="0"``,
+        ``template_type="1"``); every other field is sent **only when supplied**, and all
+        values are passed through verbatim — their accepted codes are unverified.
+
+        Returns the raw ``result_data`` dict (shape unverified against a live device).
+        """
+        body: dict[str, Any] = {
+            "uuid_list": [str(uuid) for uuid in uuid_list],
+            "set_type": str(set_type),
+            "template_type": str(template_type),
+        }
+        optional_fields: dict[str, str | int | None] = {
+            "ps_id": ps_id,
+            "is_need_master_node": is_need_master_node,
+            "is_mlpe": is_mlpe,
+            "is_communication_dev_param_set": is_communication_dev_param_set,
+            "country_id": country_id,
+            "grid_company": grid_company,
+            "grid_type": grid_type,
+            "version": version,
+            "mdsp_version": mdsp_version,
+            "sdsp_version": sdsp_version,
+            "check_country": check_country,
+            "is_support_au_grid_type": is_support_au_grid_type,
+        }
+        for field_name, value in optional_fields.items():
+            if value is not None:
+                body[field_name] = str(value)
+        data = await self.async_request(_PARAM_SET_TEMPLATE_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_issue_parameter_instruction(
+        self,
+        ps_id: str | int,
+        uuid_list: list[str | int],
+        *,
+        device_type: str | int,
+        task_name: str,
+        expire_second: str | int,
+        set_type: str | int,
+        scenario: str | int,
+        energy_management: dict[str, Any] | None = None,
+        power_control: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Issue a parameter write the app's way (``paramSetIssueInstruction``, #92).
+
+        The app's native write, and the fallback if ``/openapi/paramSetting`` ever stops
+        accepting user tokens. Instead of a flat ``param_list`` it sends structured
+        ``energy_management`` / ``power_control`` objects plus a ``scenario`` code.
+
+        Both structured objects are passed through verbatim. Their **top-level field
+        names** are verified from the app's DTOs:
+
+        * ``energy_management`` — ``param_info``, ``work_mode``, ``self_consumption``,
+          ``tou``, ``vpp``, ``compulsory_mode``, ``ai_mode``, ``backup_mode``,
+          ``feed_in_control_method_phase``.
+        * ``power_control`` — ``DI_power_regulation``, ``grid_power_regulation``,
+          ``self_work_mode``, ``peak_shaving_mode``.
+
+        Their **nested** shapes and the accepted ``scenario`` / ``set_type`` codes are
+        unverified: the only ``scenario`` the app hardcodes anywhere is ``"5"``, and the
+        rest come from UI state, so nothing is enumerated here.
+
+        Returns the raw ``result_data`` dict — the app then polls
+        :meth:`async_get_back_read_value` with the task it carries.
+        """
+        body: dict[str, Any] = {
+            "uuid_list": [str(uuid) for uuid in uuid_list],
+            "ps_id": str(ps_id),
+            "device_type": str(device_type),
+            "task_name": str(task_name),
+            "expire_second": str(expire_second),
+            "set_type": str(set_type),
+            "scenario": str(scenario),
+        }
+        if energy_management is not None:
+            body["energy_management"] = energy_management
+        if power_control is not None:
+            body["power_control"] = power_control
+        data = await self.async_request(_PARAM_SET_INSTRUCTION_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_get_back_read_value(
+        self,
+        task_id: str | int,
+        uuid: str | int,
+        *,
+        template_type: str | int | None = None,
+        is_get_device_shadow: str | int | None = None,
+        set_id: str | int | None = None,
+    ) -> dict[str, Any]:
+        """Read a parameter task's value back (``getBackReadValue``, #92).
+
+        ``set_id`` is sent as ``setId`` (the app's spelling). Note the app attaches it
+        only when ``template_type`` is also set; that reads like an app bug rather than a
+        protocol rule, so it is not replicated — ``set_id`` is sent whenever given.
+
+        Returns the raw ``result_data`` dict.
+        """
+        body: dict[str, Any] = {"task_id": str(task_id), "uuid": str(uuid)}
+        if template_type is not None:
+            body["template_type"] = str(template_type)
+        if is_get_device_shadow is not None:
+            body["is_get_device_shadow"] = str(is_get_device_shadow)
+        if set_id is not None:
+            body["setId"] = str(set_id)
+        data = await self.async_request(_PARAM_SET_READBACK_PATH, body)
+        return dict(data.get("result_data") or {})
+
+    async def async_cancel_fast_setting_task(
+        self, ps_id: str | int, *, task_id: str | int | None = None
+    ) -> dict[str, Any]:
+        """Abort a pending parameter task (``cancelFastSettingTask``, #92).
+
+        The app sends ``ps_id`` and omits ``task_id`` when it is empty, so it is added
+        only when supplied here too. Returns the raw ``result_data`` dict.
+        """
+        body: dict[str, Any] = {"ps_id": str(ps_id)}
+        if task_id is not None:
+            body["task_id"] = str(task_id)
+        data = await self.async_request(_CANCEL_FAST_SETTING_PATH, body)
         return dict(data.get("result_data") or {})
