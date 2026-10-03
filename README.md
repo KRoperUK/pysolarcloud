@@ -182,6 +182,11 @@ left as caller-supplied optional arguments and documented as unverified against 
 | `async_add_or_update_discharge_plan(ps_id, week_days=…, cycle_type=…, …)` | `addOrUpdateDischargePlan` |
 | `async_delete_discharge_plan(ps_id)` / `async_select_discharge_plan(ps_id)` | `deleteDischargePlan` / `selectDischargePlan` |
 | `async_set_system_power_backup_param(ps_id, task_name=…, mode=…, status=…, config=…)` | `setSysPowerBackupParam` |
+| `async_check_can_set_parameters(uuid_list, check_type=…)` | `checkIsCanDoParamSet` |
+| `async_get_param_set_template_point_info(uuid_list, …)` | `getParamSetTemplatePointInfo` |
+| `async_issue_parameter_instruction(ps_id, uuid_list, …, energy_management=…, power_control=…)` | `paramSetIssueInstruction` |
+| `async_get_back_read_value(task_id, uuid, …)` | `getBackReadValue` |
+| `async_cancel_fast_setting_task(ps_id, task_id=…)` | `cancelFastSettingTask` |
 
 > ⚠️ **Breaking change in 0.16.0** — `async_get_device_realtime` now takes a device
 > `ps_key` (from `async_get_devices`) as its single positional argument instead of
