@@ -1,2 +1,3 @@
 include README.md
 exclude tests/*
+include src/pysolarcloud/data/*.json
