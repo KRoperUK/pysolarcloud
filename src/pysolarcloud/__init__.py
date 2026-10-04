@@ -454,6 +454,12 @@ class DeviceEndpointUnavailable(PySolarCloudException):
         self.response = response
 
 
+# The measure-point catalog (sungrow-hass#484): documented points, enum tables and the
+# library's point codes, read from package data once, on first use.
+from .measure_points import MeasurePoint as MeasurePoint  # noqa: E402
+from .measure_points import MeasurePointCatalog as MeasurePointCatalog  # noqa: E402
+from .measure_points import load_measure_points as load_measure_points  # noqa: E402
+
 # Typed dispatch-parameter metadata (#71). Re-exported at package top level so
 # consumers building UI on top of the library (sungrow-hass) can do
 # ``from pysolarcloud import PARAMETERS, ParameterSpec`` without reaching into the

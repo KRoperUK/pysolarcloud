@@ -5,8 +5,9 @@ from setuptools import find_packages, setup
 setup(
     packages=find_packages(where="src"),
     package_dir={"": "src"},
-    # Ship the py.typed marker (PEP 561) so consumers get the inline type hints.
-    package_data={"pysolarcloud": ["py.typed"]},
+    # Ship the py.typed marker (PEP 561) so consumers get the inline type hints, and the
+    # measure-point catalog read through importlib.resources (pysolarcloud.measure_points).
+    package_data={"pysolarcloud": ["py.typed", "data/*.json"]},
     install_requires=[
         "aiohttp",
         # AES-ECB + RSA for the user-account (app/web) login envelope (user_auth.py, #40).

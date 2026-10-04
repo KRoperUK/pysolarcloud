@@ -4,6 +4,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
 from . import _LOGGER, AbstractAuth, DeviceEndpointUnavailable, PySolarCloudException
+from .measure_points import load_measure_points
 
 if TYPE_CHECKING:
     # Type-only import: ``UserAuth`` pulls in ``cryptography`` (heavy) and is lazily
@@ -652,79 +653,8 @@ class Plants:
             "name": point_dict.get(point_id, {}).get("point_name", None),
         }
 
-    measure_points = {
-        "83022": "daily_yield",  # Wh
-        "83024": "total_yield",  # Wh
-        "83033": "power",  # W
-        "83019": "power_fraction",  # Plant Power/Installed Power of Plant
-        "83006": "meter_daily_yield",  # Wh
-        "83020": "meter_total_yield",  # Wh
-        "83011": "meter_e_daily_consumption",  # Wh
-        "83021": "accumulative_power_consumption_by_meter",  # Wh
-        "83032": "meter_ac_power",  # W
-        "83007": "meter_pr",  #
-        "83002": "inverter_ac_power",  # W
-        "83009": "inverter_daily_yield",  # Wh
-        "83004": "inverter_total_yield",  # Wh
-        "83012": "p_radiation_h",  # W/㎡
-        "83013": "daily_irradiation",  # Wh/㎡
-        "83023": "plant_pr",  #
-        "83005": "daily_equivalent_hours",  # h
-        "83025": "plant_equivalent_hours",  # h
-        "83018": "daily_yield_theoretical",  # Wh
-        "83001": "inverter_ac_power_normalization",  # W/Wp
-        "83008": "daily_equivalent_hours_of_inverter",  # h
-        "83010": "inverter_pr",  #
-        "83016": "plant_ambient_temperature",  # ℃
-        "83017": "plant_module_temperature",  # ℃
-        "83046": "pcs_total_active_power",  # W
-        "83052": "total_load_active_power",  # W
-        "83067": "total_active_power_of_pv",  # W
-        "83097": "daily_direct_energy_consumption",  # Wh
-        "83100": "total_direct_energy_consumption",  # Wh
-        "83102": "energy_purchased_today",  # Wh
-        "83105": "total_purchased_energy",  # Wh
-        "83106": "load_power",  # W
-        "83118": "daily_load_consumption",  # Wh
-        "83124": "total_load_consumption",  # Wh
-        "83119": "daily_feed_in_energy_pv",  # Wh
-        "83072": "feed_in_energy_today",  # Wh
-        "83075": "feed_in_energy_total",  # Wh
-        "83252": "battery_level_soc",  #
-        "83129": "battery_soc",  #
-        "83232": "total_field_soc",  #
-        "83233": "total_field_maximum_rechargeable_power",  # W
-        "83234": "total_field_maximum_dischargeable_power",  # W
-        "83235": "total_field_chargeable_energy",  # Wh
-        "83236": "total_field_dischargeable_energy",  # Wh
-        "83237": "total_field_energy_storage_maximum_reactive_power",  # var
-        "83238": "total_field_energy_storage_active_power",  # W
-        "83239": "total_field_reactive_power",  # var
-        "83240": "total_field_power_factor",  #
-        "83243": "daily_field_charge_capacity",  # Wh
-        "83241": "total_field_charge_capacity",  # Wh
-        "83244": "daily_field_discharge_capacity",  # Wh
-        "83242": "total_field_discharge_capacity",  # Wh
-        "83548": "total_number_of_charge_discharge",  #
-        "83549": "grid_active_power",  # W
-        "83419": "daily_highest_inverter_power_inverter_installed_capacity",  #
-        "83317": "power_forecast",  # W
-        "83318": "planned_es_charging_discharging_power",  # W
-        "83319": "planned_es_soc",  #
-        "83320": "planned_charging_power",  # Wh
-        "83321": "planned_discharging_power",  # Wh
-        "83322": "ess_daily_charge_ems",  # Wh
-        "83324": "energy_storage_cumulative_charge",  # Wh
-        "83323": "ess_daily_discharge_ems",  # Wh
-        "83325": "cumulative_discharge",  # Wh
-        "83327": "energy_storage_remaining_charge",  # Wh
-        "83326": "energy_storage_active_power_ems",  # W
-        "83328": "grid_active_power_ems",  # W
-        "83329": "pv_active_power_ems",  # W
-        "83330": "load_active_power_ems",  # W
-        "83331": "daily_pv_yield_ems",  # Wh
-        "83332": "total_pv_yield",  # Wh
-        "83334": "energy_storage_soc_ems",  #
-        "83335": "energy_storage_remaining_charge_ems",  # Wh
-        "83743": "daily_yield_loss_load_shedding",  # Wh (daily yield loss due to load shedding)
-    }
+    #: Default ``{point_id: code}`` request map. Loaded from the packaged measure-point
+    #: catalog (``codes`` in ``pysolarcloud/data/measure_points.json``), the single source
+    #: of truth for point IDs, codes, documented names and units — see
+    #: :func:`pysolarcloud.load_measure_points`.
+    measure_points: dict[str, str] = dict(load_measure_points().codes)

@@ -98,6 +98,40 @@ for plant_id, data in real_time_data.items():
 
 The `Auth` class keeps the access between calls and refreshes it when needed. If you prefer to manage this state yourself, you can create your own subclass of `AbstractAuth`.
 
+## Measure-point catalog
+
+The documented iSolarCloud measuring points ship with the package as data, in
+`pysolarcloud/data/measure_points.json`, and are read through `importlib.resources`.
+It is the single source of truth for point IDs, the library's readable codes, and the
+documented English names, units and value-enum tables; `Plants.measure_points` (the
+default request map) is built from it.
+
+```python
+from pysolarcloud import load_measure_points
+
+catalog = load_measure_points()          # parsed once, then cached; immutable
+
+point = catalog.get("83124")             # or catalog.get(83124)
+point.name, point.unit, point.code       # ("Total Load Consumption", "Wh", "total_load_consumption")
+point.catalogs                           # ("common-plant-measuring-points",) — the docs page(s)
+
+catalog.by_code("total_load_consumption") is point   # True
+catalog.resolve("total_load_consumption")            # by point ID *or* library code
+
+catalog.decode_enum("33716", "3")        # "Charging" (None for an undocumented code)
+catalog.enum_options("29")               # distinct documented labels, in table order
+```
+
+The catalog holds vendor facts only: the point ID, the name and unit as documented, which
+documentation page lists it, its enum table, plus the library's own `code`. Presentation —
+display names, Home Assistant device/state classes, icons — is left to the consumer. The
+document carries a `schema_version`; the loader refuses a version it does not understand.
+The API's per-response `point_unit` stays authoritative at runtime: the documented unit is
+reference data. Names and units are the docs' as curated in sungrow-hass (doc typos fixed,
+superscripts normalised, e.g. `W/m^2^` → `W/m²`); a point seen in API responses but on no
+docs page has empty `catalogs` and a `note` saying where it came from. `scripts/gen_measure_points.py` is the one-off tool that converted the
+catalog from the sungrow-hass integration; edit the JSON directly from now on.
+
 ## Grid Control
 
 The `Control` class enables retrieving and updating grid control settings. Parameters and value sets are documented in the iSolarCloud Developer portal.
