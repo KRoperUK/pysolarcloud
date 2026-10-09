@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.19.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.18.0...v0.19.0) (2026-10-09)
+
+
+### Features
+
+* app-native param-set flow — gate, template discovery, issue, read-back, cancel ([#92](https://github.com/KRoperUK/pysolarcloud/issues/92)) ([ead4b65](https://github.com/KRoperUK/pysolarcloud/commit/ead4b65726699f1b5f22290aafad48fbf6b6df9a))
+* app-native param-set flow — gate, template discovery, issue, read-back, cancel ([#92](https://github.com/KRoperUK/pysolarcloud/issues/92)) ([5b35424](https://github.com/KRoperUK/pysolarcloud/commit/5b35424f46a3d054fa94ae9dede02109b801e78a))
+* ship the measure-point catalog as package data ([09f90b2](https://github.com/KRoperUK/pysolarcloud/commit/09f90b2a652447f65f4c79fe01dae214b6a7ef23))
+* ship the measure-point catalog as package data ([d1fb404](https://github.com/KRoperUK/pysolarcloud/commit/d1fb404b31897965af4a239661bee7fdf731e497))
+
 ## [0.18.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.17.0...v0.18.0) (2026-09-15)
 
 
