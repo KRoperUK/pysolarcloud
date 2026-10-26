@@ -1,9 +1,18 @@
 import asyncio
 import contextlib
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any, cast
 
-from . import _LOGGER, AbstractAuth, DeviceNotWritableError, PySolarCloudException
+from . import (
+    _LOGGER,
+    AbstractAuth,
+    AuthError,
+    DeviceNotWritableError,
+    PySolarCloudException,
+    RateLimitError,
+    TokenRefreshError,
+)
 from .parameters import _LEGACY_SPECS as _LEGACY_SPECS
 from .parameters import PARAMETERS, ParameterSpec
 
@@ -20,6 +29,40 @@ _DEVICE_TASK_ACCEPTED = "1"
 _EXPIRE_SECONDS = 120
 # Seconds between polls while a task is still running.
 _POLL_INTERVAL = 5
+
+
+async def _read_all_with_fallback(
+    read: Callable[[list[str]], Awaitable[list[dict[str, Any]]]], codes: list[str]
+) -> list[dict[str, Any]]:
+    """Read ``codes`` in one bulk call; if the device rejects it, read them one at a time.
+
+    Some models reject the bulk read-all outright (e.g. when a single code in the set fails
+    the API's validation). Rather than failing totally, fall back to one read per code and
+    return whatever the device does answer. Codes that fail individually are logged and
+    left out; if *none* answer, the original bulk error is raised. Credential and
+    rate-limit errors are never retried per-setting: they would only repeat the failure
+    ``len(codes)`` times (and burn quota). Used by both :class:`Control` and
+    :class:`~pysolarcloud.user_control.UserControl`.
+    """
+    try:
+        return await read(codes)
+    except (AuthError, TokenRefreshError, RateLimitError):
+        raise
+    except PySolarCloudException as bulk_err:
+        _LOGGER.warning(
+            "Bulk parameter read rejected (%s); falling back to per-setting reads of %d codes", bulk_err, len(codes)
+        )
+        rows: list[dict[str, Any]] = []
+        for code in codes:
+            try:
+                rows.extend(await read([code]))
+            except (AuthError, TokenRefreshError, RateLimitError):
+                raise
+            except PySolarCloudException as err:
+                _LOGGER.debug("Per-setting read of %s failed: %s", code, err)
+        if not rows:
+            raise bulk_err from None
+        return rows
 
 
 class Control:
@@ -136,13 +179,24 @@ class Control:
     async def async_read_parameters(
         self, device_uuid: str, param_list: list[str] | None = None
     ) -> list[dict[str, Any]]:
-        """Read the parameters from the device."""
-        uri = "/openapi/platform/paramSetting"
+        """Read the parameters from the device.
+
+        With no ``param_list`` every known config parameter is requested in one bulk call.
+        Some models reject that bulk call; if so this falls back to reading the settings one
+        at a time and returns the ones the device answers (see :func:`_read_all_with_fallback`),
+        raising only if none can be read. Pass an explicit ``param_list`` to skip the bulk
+        call (an explicit list is never retried per setting: a rejection raises).
+        """
         if param_list is None:
-            ps: list[str] = list(self.config_parameters.keys())
-        else:
-            param_map = self._param_code_map()
-            ps = [param_map.get(p, p) for p in param_list]
+            return await _read_all_with_fallback(
+                lambda codes: self._read_codes(device_uuid, codes), list(self.config_parameters.keys())
+            )
+        param_map = self._param_code_map()
+        return await self._read_codes(device_uuid, [param_map.get(p, p) for p in param_list])
+
+    async def _read_codes(self, device_uuid: str, ps: list[str]) -> list[dict[str, Any]]:
+        """Submit one set_type 2 read task for raw param codes ``ps`` and wait for it."""
+        uri = "/openapi/platform/paramSetting"
         _LOGGER.debug("async_read_parameters: param_list=%s", ps)
         plist = [{"param_code": p, "set_value": ""} for p in ps]
         params = {

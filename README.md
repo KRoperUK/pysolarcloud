@@ -145,7 +145,9 @@ from pysolarcloud.plants import DeviceType
 devices = await plants_api.async_get_plant_devices(plant_id, device_types=[DeviceType.ENERGY_STORAGE_SYSTEM])
 device_uuid = devices[0]["uuid"]
 control_api = Control(auth)
-# Fetch current config
+# Fetch current config. With no list this requests every known setting; if the model
+# rejects the bulk read, settings are read one at a time and the answered ones returned.
+# Pass an explicit list (names or codes) to skip the bulk call.
 current_settings = await control_api.async_read_parameters(device_uuid)
 print(current_settings)
 # Make an update using the canonical command values.
