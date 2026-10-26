@@ -145,7 +145,9 @@ _PARAM_SET_READBACK_PATH = "/v1/devService/getBackReadValue"
 _CANCEL_FAST_SETTING_PATH = "/v1/devService/cancelFastSettingTask"
 
 # Documented result codes meaning the session/login is invalid → re-login (Appendix 2).
-_LOGIN_INVALID_CODES = frozenset({"E00003", "1"})
+# Only codes that can reach the re-login branch belong here: it is guarded by
+# ``not _succeeded(data)``, and ``"1"`` is the success code, so it could never match (#128).
+_LOGIN_INVALID_CODES = frozenset({"E00003"})
 
 DEFAULT_TIMEOUT = 30
 

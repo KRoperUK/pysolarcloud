@@ -247,6 +247,22 @@ async def test_request_re_logs_in_on_invalid_token():
     assert out["result_data"] == {"ok": True}
 
 
+async def test_success_envelope_does_not_trigger_re_login():
+    """The success code never re-logs in, and only a genuinely invalid-token code is listed (#128)."""
+    assert frozenset({"E00003"}) == ua._LOGIN_INVALID_CODES
+
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_code": "1", "result_msg": "success", "result_data": {}})
+    auth.async_login = AsyncMock()
+
+    await auth.async_request("/v1/foo")
+
+    auth.async_login.assert_not_called()
+    assert auth._post.await_count == 1
+
+
 async def test_get_plants_returns_page_list():
     """async_get_plants returns the pageList from getPsList."""
     auth = _auth()
