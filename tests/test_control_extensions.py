@@ -218,6 +218,47 @@ async def test_param_config_verification_false_when_unsupported(auth, control):
 
 
 @pytest.mark.asyncio
+async def test_read_parameters_accepted_without_task_id_is_device_not_writable(auth, control):
+    """An accepted submit with no task_id to poll raises the typed error, not a KeyError (#125)."""
+    from pysolarcloud import DeviceNotWritableError
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_data": {"check_result": "1", "dev_result_list": [{"code": "1"}]}}
+    )
+
+    with pytest.raises(DeviceNotWritableError):
+        await control.async_read_parameters("dev-1", ["soc_upper_limit"])
+
+
+@pytest.mark.asyncio
+async def test_param_config_verification_top_level_unsupported_is_false(auth, control):
+    """A top-level check_result != "1" is "unsupported" -> False, as on the user transport (#125).
+
+    This used to raise a base exception whose message was just the result_code.
+    """
+    auth.request.return_value = _mock_response({"result_code": "1", "result_data": {"check_result": "0"}})
+
+    assert await control.async_param_config_verification("dev-1", 0) is False
+
+
+@pytest.mark.asyncio
+async def test_param_config_verification_top_level_only_reply_is_supported(auth, control):
+    """A reply with only the top-level answer (no dev_result_list) used to IndexError; now True (#125)."""
+    auth.request.return_value = _mock_response({"result_code": "1", "result_data": {"check_result": "1"}})
+
+    assert await control.async_param_config_verification("dev-1", 0) is True
+
+
+@pytest.mark.asyncio
+async def test_param_config_verification_missing_result_code_raises(auth, control):
+    """OAuth replies must carry result_code; its absence is an error, not 'unsupported'."""
+    auth.request.return_value = _mock_response({"result_data": {"check_result": "1"}})
+
+    with pytest.raises(PySolarCloudException, match="missing result_code"):
+        await control.async_param_config_verification("dev-1", 0)
+
+
+@pytest.mark.asyncio
 async def test_param_config_verification_raises_on_error(auth, control):
     """A result_code != "1" raises rather than reporting unsupported."""
     auth.request.return_value = _mock_response({"result_code": "E00003", "result_data": None})
@@ -298,6 +339,55 @@ async def test_read_parameters_defaults_to_all_config_parameters(auth, control):
     body = auth.request.call_args.args[1]
     sent_codes = {p["param_code"] for p in body["param_list"]}
     assert sent_codes == set(Control.config_parameters.keys())
+
+
+@pytest.mark.asyncio
+async def test_wait_for_task_envelope_failure_raises_typed_error(auth, control):
+    """A failed task-poll envelope is classified via from_response, not 'not successful' (#64, #125)."""
+    auth.request.return_value = _mock_response({"result_code": "E00003", "result_msg": "token invalid"})
+    with (
+        patch("pysolarcloud.control.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(AuthError),
+    ):
+        await control.wait_for_task("dev-1", "t-1")
+
+
+@pytest.mark.asyncio
+async def test_wait_for_task_coerces_quoted_status(auth, control):
+    """A status sent as text ("8" done, "2" running) is treated like the number (#121)."""
+    running = _mock_response({"result_code": "1", "result_data": {"command_status": "2"}})
+    done = _mock_response(
+        {"result_code": "1", "result_data": {"command_status": "8", "param_list": [{"param_code": "10005"}]}}
+    )
+    auth.request.side_effect = [running, done]
+    with patch("pysolarcloud.control.asyncio.sleep", new=AsyncMock()):
+        result = await control.wait_for_task("dev-1", "t-1", timeout=100)
+
+    assert result == [{"param_code": "10005"}]
+    assert auth.request.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_wait_for_task_quoted_running_status_still_times_out(auth, control):
+    """A quoted running status keeps polling until the deadline, then raises (#121)."""
+    auth.request.return_value = _mock_response({"result_code": "1", "result_data": {"command_status": "2"}})
+    with (
+        patch("pysolarcloud.control.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(PySolarCloudException, match="[Tt]imed out"),
+    ):
+        await control.wait_for_task("dev-1", "t-1", timeout=0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [5, "5", "nope", None])
+async def test_wait_for_task_failed_or_unparseable_status_raises_not_successful(auth, control, status):
+    """Failed or unparseable statuses raise the (correctly spelled) 'not successful' error (#121)."""
+    auth.request.return_value = _mock_response({"result_code": "1", "result_data": {"command_status": status}})
+    with (
+        patch("pysolarcloud.control.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(PySolarCloudException, match="Task not successful t-1"),
+    ):
+        await control.wait_for_task("dev-1", "t-1")
 
 
 @pytest.mark.asyncio
