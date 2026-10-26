@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.20.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.19.0...v0.20.0) (2026-10-26)
+
+
+### Features
+
+* **control:** fall back to per-setting reads when bulk read is rejected ([0973084](https://github.com/KRoperUK/pysolarcloud/commit/097308420b15bcdc7772bd8512a2418c2e733564)), closes [#129](https://github.com/KRoperUK/pysolarcloud/issues/129)
+* **plants:** add DeviceFaultStatus alias ([592f14c](https://github.com/KRoperUK/pysolarcloud/commit/592f14c8fb92db298165c3566984a7622fb0f6ff)), closes [#132](https://github.com/KRoperUK/pysolarcloud/issues/132)
+
+
+### Bug Fixes
+
+* **auth:** accept Server enum for Auth host ([4fb778d](https://github.com/KRoperUK/pysolarcloud/commit/4fb778dc2d890256ff9efb4b1fa404e4848c6992)), closes [#123](https://github.com/KRoperUK/pysolarcloud/issues/123)
+* **auth:** login and token-reply hardening (P2) ([9160c9c](https://github.com/KRoperUK/pysolarcloud/commit/9160c9c578803044a0062d12351fef5de015d006))
+* **auth:** validate token reply on first authorization ([ec15175](https://github.com/KRoperUK/pysolarcloud/commit/ec1517580ec0305eca770d9a9ee243d72973b713)), closes [#119](https://github.com/KRoperUK/pysolarcloud/issues/119)
+* **control:** coerce quoted task status when polling ([8751de3](https://github.com/KRoperUK/pysolarcloud/commit/8751de3e8d30e928cc5bfea58d8df083351f377c)), closes [#121](https://github.com/KRoperUK/pysolarcloud/issues/121)
+* **control:** quoted task status and shared reply logic (P4) ([b1e8045](https://github.com/KRoperUK/pysolarcloud/commit/b1e8045622fcf7c78819717eb8e9d6792c997cbd))
+* history interval, point names, read-all fallback (P3) ([a070589](https://github.com/KRoperUK/pysolarcloud/commit/a070589d063464d325dd368a251f1654a282e3a0))
+* **plants:** convert history interval with total seconds ([ccc54b7](https://github.com/KRoperUK/pysolarcloud/commit/ccc54b708f4f967de99155e887c9183a5f273c97)), closes [#120](https://github.com/KRoperUK/pysolarcloud/issues/120)
+* **plants:** raise ValueError for unknown measure point names ([a05df06](https://github.com/KRoperUK/pysolarcloud/commit/a05df068ca7e5feeccbdc85bec6255131feb3f11)), closes [#122](https://github.com/KRoperUK/pysolarcloud/issues/122)
+* **plants:** tag list-or-map wrappers as dict | list ([5dc6229](https://github.com/KRoperUK/pysolarcloud/commit/5dc6229d69f674fbf82a4ad1076b587d44cb6528)), closes [#126](https://github.com/KRoperUK/pysolarcloud/issues/126)
+* **plants:** tolerate devices missing type or fault status ([d23580e](https://github.com/KRoperUK/pysolarcloud/commit/d23580eb9c0aef7949f9160a392d8969689b977c)), closes [#130](https://github.com/KRoperUK/pysolarcloud/issues/130)
+* **user-auth:** drop unreachable success code from re-login codes ([472578c](https://github.com/KRoperUK/pysolarcloud/commit/472578c99356adab64e5828c87818e01ad8997d5)), closes [#128](https://github.com/KRoperUK/pysolarcloud/issues/128)
+* **user-auth:** fail login when the reply has no user_id ([321f774](https://github.com/KRoperUK/pysolarcloud/commit/321f7740e270b6c2d11de31f9b8458f2800dd31c)), closes [#133](https://github.com/KRoperUK/pysolarcloud/issues/133)
+* **user-auth:** wrap undecodable replies in typed exception ([004ac81](https://github.com/KRoperUK/pysolarcloud/commit/004ac81fdae4c7416f6a8a007660353d044047da)), closes [#127](https://github.com/KRoperUK/pysolarcloud/issues/127)
+
+
+### Performance Improvements
+
+* **user-auth:** parse the login key once per session ([41d5148](https://github.com/KRoperUK/pysolarcloud/commit/41d51486a97bc9014d37f19718187ae176fe320f)), closes [#131](https://github.com/KRoperUK/pysolarcloud/issues/131)
+
+
+### Documentation
+
+* configure agent skills (issue tracker, triage labels, domain docs) ([e3ad3e7](https://github.com/KRoperUK/pysolarcloud/commit/e3ad3e7f696d9952003904532e16f4dc1b5466f9))
+* configure agent skills (issue tracker, triage labels, domain docs) ([8b1cba8](https://github.com/KRoperUK/pysolarcloud/commit/8b1cba8d4de95643c34d1a105fd839971f518051))
+
 ## [0.19.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.18.0...v0.19.0) (2026-10-09)
 
 
