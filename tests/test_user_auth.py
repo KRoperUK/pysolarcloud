@@ -159,6 +159,20 @@ async def test_login_state_one_with_token_succeeds():
     assert auth.user_id == "42"
 
 
+async def test_login_without_user_id_raises_auth_error():
+    """A success reply that omits the account id fails at login, not with user_id == "None" (#133)."""
+    from pysolarcloud import AuthError
+
+    for result_data in ({"login_state": "1", "token": "T"}, {"login_state": "1", "token": "T", "user_id": ""}):
+        auth = _auth()
+        auth._post = AsyncMock(return_value={"result_code": "1", "result_msg": "success", "result_data": result_data})
+
+        with pytest.raises(AuthError, match="user_id"):
+            await auth.async_login()
+        assert auth.token is None
+        assert auth.user_id is None
+
+
 async def test_get_token_logs_in_once_under_concurrency():
     """Concurrent callers trigger exactly one login (serialised)."""
     auth = _auth()

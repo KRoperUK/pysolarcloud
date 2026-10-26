@@ -308,8 +308,16 @@ class UserAuth:
             suffix = f" ({remain} attempt(s) remaining)" if remain not in (None, "") else ""
             _LOGGER.error("iSolarCloud user login failed: %s%s", msg, suffix)
             raise AuthError({"error": "user_login_failed", "error_description": f"Login failed: {msg}{suffix}"})
+        user_id = result.get("user_id")
+        if user_id in (None, ""):
+            # Without an account id every later request would send the literal text "None"
+            # as ``user_id``; fail at login instead of failing obscurely downstream.
+            _LOGGER.error("iSolarCloud user login reply carried no user_id")
+            raise AuthError(
+                {"error": "user_login_failed", "error_description": "Login failed: reply is missing 'user_id'"}
+            )
         self.token = str(token)
-        self.user_id = str(result.get("user_id"))
+        self.user_id = str(user_id)
         _LOGGER.debug("iSolarCloud user login successful")
 
     async def async_get_token(self) -> str:
