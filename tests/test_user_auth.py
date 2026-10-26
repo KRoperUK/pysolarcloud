@@ -90,6 +90,39 @@ async def test_post_wraps_garbled_reply_in_typed_exception(monkeypatch):
         assert isinstance(exc.value.__cause__, ValueError)
 
 
+async def test_post_parses_login_key_once_per_session(monkeypatch):
+    """The PEM is parsed once for many requests; request behaviour is unchanged (#131)."""
+    monkeypatch.setattr(ua, "_random_aes_key", lambda: "web0123456789abc")
+    parses = 0
+    real_load = ua._load_public_key
+
+    def counting_load(pem):
+        nonlocal parses
+        parses += 1
+        return real_load(pem)
+
+    monkeypatch.setattr(ua, "_load_public_key", counting_load)
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.text = AsyncMock(return_value=ua._aes_encrypt({"result_msg": "success"}, "web0123456789abc"))
+    session = MagicMock()
+    session.request = AsyncMock(return_value=resp)
+    auth = _auth(session)
+
+    for _ in range(3):
+        assert await auth._post("/v1/x", {}, user_id="42") == {"result_msg": "success"}
+
+    assert parses == 1
+    headers = session.request.call_args.kwargs["headers"]
+    assert len(base64.b64decode(headers["x-random-secret-key"])) == 128
+    assert len(base64.b64decode(headers["x-limit-obj"])) == 128
+
+    # Reassigning the PEM invalidates the cache rather than silently using the old key.
+    auth.public_key_pem = ua.PUBLIC_KEY_PEM + "\n"
+    await auth._post("/v1/x", {}, user_id="42")
+    assert parses == 2
+
+
 async def test_post_uses_custom_sys_code(monkeypatch):
     """A sys_code kwarg overrides the default web value on the wire (#91)."""
     fixed_key = "web0123456789abc"

@@ -190,14 +190,20 @@ def _aes_decrypt(data: str, key: str) -> dict[str, Any]:
     return decoded
 
 
-def _rsa_encrypt(value: str, public_key_pem: str) -> str:
-    """RSA (PKCS#1 v1.5) encrypt a short string with the login public key → base64."""
-    public_key = load_pem_public_key(public_key_pem.encode("utf-8"))
-    # ``load_pem_public_key`` returns a union that includes types without ``.encrypt``
-    # in some ``cryptography`` versions (older stubs) and a concrete RSAPublicKey in
-    # others (newer stubs). ``unused-ignore`` prevents mypy from complaining on the
-    # newer-stub side where the ``union-attr`` ignore is unnecessary.
-    ciphertext = public_key.encrypt(value.encode("utf-8"), asym_padding.PKCS1v15())  # type: ignore[union-attr,unused-ignore]
+def _load_public_key(public_key_pem: str) -> Any:
+    """Parse the PEM login key into a key object (typed ``Any``: the concrete class varies by stubs)."""
+    return load_pem_public_key(public_key_pem.encode("utf-8"))
+
+
+def _rsa_encrypt(value: str, public_key: Any) -> str:
+    """RSA (PKCS#1 v1.5) encrypt a short string with the login public key → base64.
+
+    ``public_key`` is either the PEM text or a key object already parsed by
+    :func:`_load_public_key` (so callers encrypting repeatedly can parse once).
+    """
+    if isinstance(public_key, str):
+        public_key = _load_public_key(public_key)
+    ciphertext = public_key.encrypt(value.encode("utf-8"), asym_padding.PKCS1v15())
     return base64.b64encode(ciphertext).decode("ascii")
 
 
@@ -246,6 +252,8 @@ class UserAuth:
         self.websession = websession
         self.token: str | None = None
         self.user_id: str | None = None
+        # (pem, parsed key) so the login key is parsed once per session, not per request.
+        self._parsed_login_key: tuple[str, Any] | None = None
         # Serialise logins so concurrent callers don't each spend a login.
         self._login_lock: asyncio.Lock | None = None
 
@@ -267,15 +275,25 @@ class UserAuth:
             "api_key_param": {"timestamp": int(time.time() * 1000), "nonce": _random_nonce()},
         }
 
+    def _login_key(self) -> Any:
+        """Return the parsed login public key, parsing the PEM once per session.
+
+        Re-parses only if :attr:`public_key_pem` is reassigned after the first request.
+        """
+        if self._parsed_login_key is None or self._parsed_login_key[0] != self.public_key_pem:
+            self._parsed_login_key = (self.public_key_pem, _load_public_key(self.public_key_pem))
+        return self._parsed_login_key[1]
+
     async def _post(self, path: str, body: dict[str, Any], *, user_id: str = "") -> dict[str, Any]:
         """AES/RSA-envelope a request, POST it, and return the decrypted JSON body."""
         key = _random_aes_key()
+        public_key = self._login_key()
         headers = {
             "content-type": "application/json;charset=UTF-8",
             "sys_code": self.sys_code,
             "x-access-key": self.access_key,
-            "x-random-secret-key": _rsa_encrypt(key, self.public_key_pem),
-            "x-limit-obj": _rsa_encrypt(user_id, self.public_key_pem),
+            "x-random-secret-key": _rsa_encrypt(key, public_key),
+            "x-limit-obj": _rsa_encrypt(user_id, public_key),
         }
         encrypted = _aes_encrypt(body, key)
         resp = await self.websession.request("post", f"{self.host}{path}", data=encrypted, headers=headers)
