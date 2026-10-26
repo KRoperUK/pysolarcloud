@@ -342,6 +342,17 @@ async def test_read_parameters_defaults_to_all_config_parameters(auth, control):
 
 
 @pytest.mark.asyncio
+async def test_wait_for_task_envelope_failure_raises_typed_error(auth, control):
+    """A failed task-poll envelope is classified via from_response, not 'not successful' (#64, #125)."""
+    auth.request.return_value = _mock_response({"result_code": "E00003", "result_msg": "token invalid"})
+    with (
+        patch("pysolarcloud.control.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(AuthError),
+    ):
+        await control.wait_for_task("dev-1", "t-1")
+
+
+@pytest.mark.asyncio
 async def test_wait_for_task_coerces_quoted_status(auth, control):
     """A status sent as text ("8" done, "2" running) is treated like the number (#121)."""
     running = _mock_response({"result_code": "1", "result_data": {"command_status": "2"}})
