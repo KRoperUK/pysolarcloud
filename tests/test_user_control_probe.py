@@ -3,10 +3,10 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import user_control_probe as probe
+from user_control_probe import ProbeResult
 
 from pysolarcloud import PySolarCloudException, Server, UserAuth
-from pysolarcloud import user_control_probe as probe
-from pysolarcloud.user_control_probe import ProbeResult
 
 
 def _auth() -> UserAuth:
