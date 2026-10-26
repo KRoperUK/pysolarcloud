@@ -419,6 +419,20 @@ async def test_read_all_does_not_fall_back_on_auth_error(auth, control):
 
 
 @pytest.mark.asyncio
+async def test_read_all_stops_per_setting_fallback_on_auth_error(auth, control):
+    """If a per-setting read hits a credential failure, it propagates instead of being skipped (#129)."""
+    auth.request.side_effect = [
+        _mock_response({"result_code": "1", "result_data": {"check_result": "0"}}),
+        _mock_response({"result_code": "E00003", "result_msg": "token invalid"}),
+    ]
+
+    with pytest.raises(AuthError):
+        await control.async_read_parameters("dev-1")
+
+    assert auth.request.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_read_explicit_list_is_not_retried_per_setting(auth, control):
     """An explicit param_list that is rejected raises; only read-all falls back (#129)."""
     _rejecting_bulk_request(auth, {"10001"})
