@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiohttp import ClientResponse
 
-from pysolarcloud.plants import DeviceFaultStaus, DeviceType, Plants
+from pysolarcloud.plants import DeviceFaultStatus, DeviceFaultStaus, DeviceType, Plants
 
 
 def _mock_response(json_data: dict, *, status: int = 200) -> ClientResponse:
@@ -497,6 +497,31 @@ async def test_get_open_point_info_posts_expected_params(auth, plants):
     assert uri == "/openapi/platform/getOpenPointInfo"
     assert body["device_type"] == str(DeviceType.INVERTER.value)
     assert data == {"point_list": [{"point_id": "83022", "point_name": "Daily Yield"}]}
+
+
+def test_device_fault_status_is_alias_of_misspelled_enum():
+    """The correctly spelled name is the same class as the kept legacy name (#132)."""
+    assert DeviceFaultStatus is DeviceFaultStaus
+    assert DeviceFaultStatus(4) is DeviceFaultStaus.NORMAL
+
+
+@pytest.mark.asyncio
+async def test_raw_result_data_wrappers_pass_list_replies_through(auth, plants):
+    """A list-shaped ``result_data`` is returned as-is, matching the ``dict | list`` return tags (#126)."""
+    rows = [{"point_id": "83022", "point_name": "Daily Yield"}]
+    auth.request.return_value = _mock_response({"result_code": "1", "result_msg": "success", "result_data": rows})
+
+    assert await plants.async_get_open_point_info() == rows
+    assert await plants.async_get_dev_property_point_value("123", "14", ["29046"]) == rows
+
+
+@pytest.mark.asyncio
+async def test_raw_result_data_wrappers_default_to_empty_map(auth, plants):
+    """An absent ``result_data`` still yields an empty map (unchanged behaviour)."""
+    auth.request.return_value = _mock_response({"result_code": "1", "result_msg": "success", "result_data": None})
+
+    assert await plants.async_get_open_point_info() == {}
+    assert await plants.async_get_dev_property_point_value("123", "14", ["29046"]) == {}
 
 
 @pytest.mark.asyncio

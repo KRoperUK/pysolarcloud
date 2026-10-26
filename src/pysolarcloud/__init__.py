@@ -176,7 +176,7 @@ class Auth(AbstractAuth):
 
     def __init__(
         self,
-        host: str,
+        host: Server | str,
         appkey: str,
         access_key: str,
         app_id: str,

@@ -234,11 +234,12 @@ class Control:
                 continue
             return
 
-    def _format_param_readout(self, param: dict[str, Any], value: str) -> dict[str, Any]:
+    @staticmethod
+    def _format_param_readout(param: dict[str, Any], value: str) -> dict[str, Any]:
         """Format the parameter response."""
         readout = {
             "id": param["param_code"],
-            "code": self.config_parameters.get(param["param_code"], param["param_code"]),
+            "code": Control.config_parameters.get(param["param_code"], param["param_code"]),
             "name": param["point_name"],
             "value": value,
             "unit": param.get("unit", ""),
