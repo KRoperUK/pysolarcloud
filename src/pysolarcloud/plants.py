@@ -92,11 +92,19 @@ class DeviceType(Enum):
 
 
 class DeviceFaultStaus(Enum):
-    """Enum for the device fault status used by async_get_plant_devices."""
+    """Enum for the device fault status used by async_get_plant_devices.
+
+    The name is misspelled but kept for backwards compatibility; prefer the correctly
+    spelled alias :data:`DeviceFaultStatus` (the very same class).
+    """
 
     FAULT = 1
     ALARM = 2
     NORMAL = 4
+
+
+#: Correctly spelled alias of :class:`DeviceFaultStaus` (identical object).
+DeviceFaultStatus = DeviceFaultStaus
 
 
 class Plants:

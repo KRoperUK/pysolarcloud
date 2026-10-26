@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiohttp import ClientResponse
 
-from pysolarcloud.plants import DeviceFaultStaus, DeviceType, Plants
+from pysolarcloud.plants import DeviceFaultStatus, DeviceFaultStaus, DeviceType, Plants
 
 
 def _mock_response(json_data: dict, *, status: int = 200) -> ClientResponse:
@@ -497,6 +497,12 @@ async def test_get_open_point_info_posts_expected_params(auth, plants):
     assert uri == "/openapi/platform/getOpenPointInfo"
     assert body["device_type"] == str(DeviceType.INVERTER.value)
     assert data == {"point_list": [{"point_id": "83022", "point_name": "Daily Yield"}]}
+
+
+def test_device_fault_status_is_alias_of_misspelled_enum():
+    """The correctly spelled name is the same class as the kept legacy name (#132)."""
+    assert DeviceFaultStatus is DeviceFaultStaus
+    assert DeviceFaultStatus(4) is DeviceFaultStaus.NORMAL
 
 
 @pytest.mark.asyncio
