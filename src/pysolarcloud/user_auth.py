@@ -281,7 +281,22 @@ class UserAuth:
         resp = await self.websession.request("post", f"{self.host}{path}", data=encrypted, headers=headers)
         resp.raise_for_status()
         text = await resp.text()
-        return _aes_decrypt(text, key)
+        try:
+            return _aes_decrypt(text, key)
+        except ValueError as err:
+            # Non-hex text (block page, maintenance notice) or a ciphertext that does not
+            # decrypt/parse to JSON surfaces as a bare ValueError (bytes.fromhex, PKCS7
+            # unpadding, UnicodeDecodeError and JSONDecodeError are all ValueErrors).
+            # Raise the library's typed exception naming the endpoint so consumers can
+            # sort it into re-login vs retry vs give-up. The raw body is deliberately
+            # left out of the message: it may be arbitrary HTML.
+            _LOGGER.error("Undecodable iSolarCloud reply from %s: %s", path, err)
+            raise PySolarCloudException(
+                {
+                    "error": "user_response_undecodable",
+                    "error_description": f"Could not decrypt/parse the reply from {path}: {err}",
+                }
+            ) from err
 
     @staticmethod
     def _succeeded(data: dict[str, Any]) -> bool:

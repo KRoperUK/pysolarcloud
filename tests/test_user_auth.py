@@ -70,6 +70,26 @@ async def test_post_encrypts_and_decrypts_round_trip(monkeypatch):
     assert headers["x-random-secret-key"]  # RSA-encrypted AES key present
 
 
+async def test_post_wraps_garbled_reply_in_typed_exception(monkeypatch):
+    """A non-hex or non-JSON reply raises PySolarCloudException naming the endpoint (#127)."""
+    fixed_key = "web0123456789abc"
+    monkeypatch.setattr(ua, "_random_aes_key", lambda: fixed_key)
+    not_json = ua._aes_encrypt({"a": 1}, "web999999999999z")  # valid hex, wrong key
+    for body in ("<html>Service unavailable</html>", not_json, ""):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.text = AsyncMock(return_value=body)
+        session = MagicMock()
+        session.request = AsyncMock(return_value=resp)
+
+        with pytest.raises(PySolarCloudException) as exc:
+            await _auth(session)._post("/v1/userService/login", {"user_account": "x"}, user_id="")
+
+        assert exc.value.error == "user_response_undecodable"
+        assert "/v1/userService/login" in str(exc.value)
+        assert isinstance(exc.value.__cause__, ValueError)
+
+
 async def test_post_uses_custom_sys_code(monkeypatch):
     """A sys_code kwarg overrides the default web value on the wire (#91)."""
     fixed_key = "web0123456789abc"
