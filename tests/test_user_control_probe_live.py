@@ -13,9 +13,9 @@ import asyncio
 import logging
 
 import pytest
+import user_control_probe as probe
 
 from pysolarcloud import PySolarCloudException, UserAuth, UserControl
-from pysolarcloud import user_control_probe as probe
 
 _LOGGER = logging.getLogger(__name__)
 

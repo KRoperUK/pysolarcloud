@@ -1,6 +1,8 @@
 """Experimental probes for user-account EMS control endpoints (sungrow-hass #271).
 
-**Not a stable public API.** Used by live/unit tests to answer whether a plain
+**Not a stable public API, and not part of the installed package.** Lives in the test
+tree (moved out of ``pysolarcloud`` in #124) so nothing can depend on it; import it as
+``user_control_probe`` from tests only. Used by live/unit tests to answer whether a plain
 iSolarCloud user session can read/write control parameters (Phase 5 spike).
 
 Clean-room only. Live finding: user tokens work on ``/openapi/paramSetting*``
@@ -17,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from .user_auth import UserAuth
+from pysolarcloud.user_auth import UserAuth
 
 _LOGGER = logging.getLogger(__name__)
 
