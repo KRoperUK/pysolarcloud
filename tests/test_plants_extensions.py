@@ -773,6 +773,32 @@ async def test_historical_data_rejects_sub_minute_interval(auth, plants, interva
 
 
 @pytest.mark.asyncio
+async def test_unknown_measure_point_name_raises_value_error_on_both_paths(auth, plants):
+    """A typo'd point name raises ValueError naming the valid codes, not a bare KeyError (#122)."""
+    from datetime import datetime
+
+    pattern = r"Unknown measure point\(s\) \['powr'\].*valid codes are: .*\bpower\b"
+    with pytest.raises(ValueError, match=pattern):
+        await plants.async_get_realtime_data("123", measure_points=["powr"])
+    with pytest.raises(ValueError, match=pattern):
+        await plants.async_get_historical_data("123", datetime(2024, 1, 1), measure_points=["power", "powr"])
+
+    auth.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_realtime_extra_measure_point_names_remain_valid(auth, plants):
+    """Codes supplied via extra_measure_points are accepted by name in measure_points (#122)."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": [], "device_point_list": []}}
+    )
+
+    await plants.async_get_realtime_data("123", measure_points=["my_extra"], extra_measure_points={"99999": "my_extra"})
+
+    assert auth.request.call_args.args[1]["point_id_list"] == ["99999"]
+
+
+@pytest.mark.asyncio
 async def test_historical_data_named_measure_points_are_mapped(auth, plants):
     """Named measure points are translated to their numeric point IDs in the points CSV."""
     from datetime import datetime

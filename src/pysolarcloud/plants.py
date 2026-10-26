@@ -168,6 +168,19 @@ class Plants:
         _LOGGER.debug("async_get_plant_devices: %s", devices)
         return devices
 
+    @staticmethod
+    def _resolve_point_ids(measure_points: list[str], points: dict[str, str]) -> list[str]:
+        """Map measure-point codes (or raw numeric ids) to point ids.
+
+        Raises :class:`ValueError` naming the valid codes for any unknown code, rather than a
+        bare ``KeyError`` that gives the caller nothing to act on.
+        """
+        code_to_id = {code: point_id for point_id, code in points.items()}
+        unknown = [m for m in measure_points if not m.isdigit() and m not in code_to_id]
+        if unknown:
+            raise ValueError(f"Unknown measure point(s) {unknown}; valid codes are: {', '.join(sorted(code_to_id))}")
+        return [m if m.isdigit() else code_to_id[m] for m in measure_points]
+
     async def async_get_realtime_data(
         self,
         plant_id: str | list[str],
@@ -208,8 +221,7 @@ class Plants:
         if measure_points is None:
             ms = list(effective_points.keys())
         else:
-            measure_points_map = {v: k for k, v in effective_points.items()}
-            ms = [m if m.isdigit() else measure_points_map[m] for m in measure_points]
+            ms = self._resolve_point_ids(measure_points, effective_points)
         uri = "/openapi/platform/getPowerStationRealTimeData"
         # The endpoint caps point_id_list at 100; request in chunks and merge per plant
         # so a large measure-point set (defaults plus user extras) doesn't fail the call.
@@ -552,8 +564,7 @@ class Plants:
         if measure_points is None:
             ms = list(self.measure_points.keys())
         else:
-            measure_points_map = {v: k for k, v in self.measure_points.items()}
-            ms = [m if m.isdigit() else measure_points_map[m] for m in measure_points]
+            ms = self._resolve_point_ids(measure_points, self.measure_points)
         if end_time is None:
             end_time = start_time + timedelta(hours=3)
         TS_FORMAT = "%Y%m%d%H%M%S"
