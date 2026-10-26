@@ -160,13 +160,27 @@ class Plants:
             raise PySolarCloudException.from_response(data)
         devices: list[dict[str, Any]] = data["result_data"]["pageList"]
         for device in devices:
-            # Convert the device type and fault status to enums
-            if device["device_type"] in DeviceType:
+            # Convert the device type and fault status to enums. Either field can be absent on
+            # an entry; leave it unset rather than failing discovery for the whole plant (#130).
+            if device.get("device_type") in DeviceType:
                 device["device_type"] = DeviceType(device["device_type"])
-            if device["dev_fault_status"] in DeviceFaultStaus:
+            if device.get("dev_fault_status") in DeviceFaultStaus:
                 device["dev_fault_status"] = DeviceFaultStaus(device["dev_fault_status"])
         _LOGGER.debug("async_get_plant_devices: %s", devices)
         return devices
+
+    @staticmethod
+    def _resolve_point_ids(measure_points: list[str], points: dict[str, str]) -> list[str]:
+        """Map measure-point codes (or raw numeric ids) to point ids.
+
+        Raises :class:`ValueError` naming the valid codes for any unknown code, rather than a
+        bare ``KeyError`` that gives the caller nothing to act on.
+        """
+        code_to_id = {code: point_id for point_id, code in points.items()}
+        unknown = [m for m in measure_points if not m.isdigit() and m not in code_to_id]
+        if unknown:
+            raise ValueError(f"Unknown measure point(s) {unknown}; valid codes are: {', '.join(sorted(code_to_id))}")
+        return [m if m.isdigit() else code_to_id[m] for m in measure_points]
 
     async def async_get_realtime_data(
         self,
@@ -208,8 +222,7 @@ class Plants:
         if measure_points is None:
             ms = list(effective_points.keys())
         else:
-            measure_points_map = {v: k for k, v in effective_points.items()}
-            ms = [m if m.isdigit() else measure_points_map[m] for m in measure_points]
+            ms = self._resolve_point_ids(measure_points, effective_points)
         uri = "/openapi/platform/getPowerStationRealTimeData"
         # The endpoint caps point_id_list at 100; request in chunks and merge per plant
         # so a large measure-point set (defaults plus user extras) doesn't fail the call.
@@ -545,11 +558,14 @@ class Plants:
         }
         """
         ps = plant_id if isinstance(plant_id, list) else [plant_id]
+        # ``timedelta.seconds`` ignores whole days (a 1-day step would send 0), so use total seconds.
+        interval_minutes = int(interval.total_seconds() // 60)
+        if interval_minutes < 1:
+            raise ValueError(f"interval must be at least 1 minute, got {interval}")
         if measure_points is None:
             ms = list(self.measure_points.keys())
         else:
-            measure_points_map = {v: k for k, v in self.measure_points.items()}
-            ms = [m if m.isdigit() else measure_points_map[m] for m in measure_points]
+            ms = self._resolve_point_ids(measure_points, self.measure_points)
         if end_time is None:
             end_time = start_time + timedelta(hours=3)
         TS_FORMAT = "%Y%m%d%H%M%S"
@@ -560,7 +576,7 @@ class Plants:
             "is_get_point_dict": "1",
             "start_time_stamp": start_time.strftime(TS_FORMAT),
             "end_time_stamp": end_time.strftime(TS_FORMAT),
-            "minute_interval": str(interval.seconds // 60),
+            "minute_interval": str(interval_minutes),
         }
         res = await self.auth.request(uri, params, lang=self.lang)
         res.raise_for_status()

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiohttp import ClientResponse
 
-from pysolarcloud import PySolarCloudException
+from pysolarcloud import AuthError, PySolarCloudException
 from pysolarcloud.control import Control
 
 
@@ -358,6 +358,89 @@ async def test_read_parameters_envelope_auth_error_routes_to_typed_subclass(auth
     auth.request.return_value = _mock_response({"result_code": "E00003", "result_msg": "dead"})
     with pytest.raises(AuthError):
         await control.async_read_parameters("dev-1", ["soc_upper_limit"])
+
+
+def _rejecting_bulk_request(auth, accepted_codes):
+    """Make auth.request reject any multi-code read and accept single reads of ``accepted_codes``.
+
+    Returns a ``wait_for_task`` replacement echoing back the code of the last accepted read.
+    """
+    rejected = {"result_code": "1", "result_data": {"check_result": "0"}}
+    accepted = {
+        "result_code": "1",
+        "result_data": {"check_result": "1", "dev_result_list": [{"code": "1", "task_id": "t-1"}]},
+    }
+    last: list[str] = []
+
+    async def request(uri, body, **kwargs):
+        codes = [p["param_code"] for p in body["param_list"]]
+        if len(codes) == 1 and codes[0] in accepted_codes:
+            last[:] = codes
+            return _mock_response(accepted)
+        return _mock_response(rejected)
+
+    async def wait_for_task(device_uuid, task_id):
+        return [{"param_code": last[0], "point_name": f"P{last[0]}", "return_value": "5"}]
+
+    auth.request.side_effect = request
+    return wait_for_task
+
+
+@pytest.mark.asyncio
+async def test_read_all_falls_back_to_per_setting_reads_when_bulk_rejected(auth, control):
+    """A rejected bulk read-all degrades to per-setting reads and returns the answered ones (#129)."""
+    wait_for_task = _rejecting_bulk_request(auth, {"10001", "10002"})
+    with patch.object(control, "wait_for_task", new=wait_for_task):
+        rows = await control.async_read_parameters("dev-1")
+
+    assert [r["id"] for r in rows] == ["10001", "10002"]
+    assert [r["code"] for r in rows] == ["soc_upper_limit", "soc_lower_limit"]
+    # One bulk attempt, then one single-code attempt per known config parameter.
+    assert auth.request.await_count == 1 + len(Control.config_parameters)
+
+
+@pytest.mark.asyncio
+async def test_read_all_raises_original_error_when_nothing_can_be_read(auth, control):
+    """If the bulk call and every per-setting read are rejected, the bulk error is raised (#129)."""
+    wait_for_task = _rejecting_bulk_request(auth, set())
+    with patch.object(control, "wait_for_task", new=wait_for_task), pytest.raises(PySolarCloudException, match="read"):
+        await control.async_read_parameters("dev-1")
+
+
+@pytest.mark.asyncio
+async def test_read_all_does_not_fall_back_on_auth_error(auth, control):
+    """Credential failures are not repeated per setting (#129)."""
+    auth.request.return_value = _mock_response({"result_code": "E00003", "result_msg": "token invalid"})
+
+    with pytest.raises(AuthError):
+        await control.async_read_parameters("dev-1")
+
+    assert auth.request.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_read_all_stops_per_setting_fallback_on_auth_error(auth, control):
+    """If a per-setting read hits a credential failure, it propagates instead of being skipped (#129)."""
+    auth.request.side_effect = [
+        _mock_response({"result_code": "1", "result_data": {"check_result": "0"}}),
+        _mock_response({"result_code": "E00003", "result_msg": "token invalid"}),
+    ]
+
+    with pytest.raises(AuthError):
+        await control.async_read_parameters("dev-1")
+
+    assert auth.request.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_read_explicit_list_is_not_retried_per_setting(auth, control):
+    """An explicit param_list that is rejected raises; only read-all falls back (#129)."""
+    _rejecting_bulk_request(auth, {"10001"})
+
+    with pytest.raises(PySolarCloudException):
+        await control.async_read_parameters("dev-1", ["soc_upper_limit", "soc_lower_limit"])
+
+    assert auth.request.await_count == 1
 
 
 def test_format_param_readout_maps_enum_value_sets(control):

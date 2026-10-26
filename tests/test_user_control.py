@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from pysolarcloud import PySolarCloudException, Server, UserAuth
+from pysolarcloud.control import Control
 from pysolarcloud.user_control import UserControl
 
 
@@ -261,6 +262,57 @@ async def test_read_parameters_none_uses_all_config_codes(monkeypatch):
     await control.async_read_parameters("9", None)
     body = auth.async_request.await_args_list[0].args[1]
     assert len(body["param_list"]) > 10
+
+
+async def test_read_all_falls_back_to_per_setting_reads_when_bulk_rejected(monkeypatch):
+    """A rejected bulk read-all degrades to per-setting reads over the user transport (#129)."""
+    monkeypatch.setattr("pysolarcloud.user_control.asyncio.sleep", AsyncMock())
+    auth = _auth()
+    answered = {"10001", "10011"}
+    last: list[str] = []
+
+    async def request(path, body=None):
+        if path == "/openapi/getParamSettingTask":
+            return _ok_task(8, [{"param_code": last[0], "point_name": "P", "return_value": "5", "set_value": ""}])
+        codes = [p["param_code"] for p in body["param_list"]]
+        if len(codes) == 1 and codes[0] in answered:
+            last[:] = codes
+            return _ok_submit()
+        return {"result_code": "1", "result_msg": "success", "result_data": {"check_result": "0"}}
+
+    auth.async_request = AsyncMock(side_effect=request)
+    control = UserControl(auth)
+
+    rows = await control.async_read_parameters("9")
+
+    assert [r["id"] for r in rows] == ["10001", "10011"]
+
+
+async def test_read_all_raises_when_bulk_and_every_single_read_rejected(monkeypatch):
+    monkeypatch.setattr("pysolarcloud.user_control.asyncio.sleep", AsyncMock())
+    auth = _auth()
+    auth.async_request = AsyncMock(
+        return_value={"result_code": "1", "result_msg": "success", "result_data": {"check_result": "0"}}
+    )
+    control = UserControl(auth)
+
+    with pytest.raises(PySolarCloudException, match="rejected"):
+        await control.async_read_parameters("9")
+
+    assert auth.async_request.await_count == 1 + len(Control.config_parameters)
+
+
+async def test_read_explicit_list_is_not_retried_per_setting(monkeypatch):
+    auth = _auth()
+    auth.async_request = AsyncMock(
+        return_value={"result_code": "1", "result_msg": "success", "result_data": {"check_result": "0"}}
+    )
+    control = UserControl(auth)
+
+    with pytest.raises(PySolarCloudException):
+        await control.async_read_parameters("9", ["10011", "10001"])
+
+    assert auth.async_request.await_count == 1
 
 
 async def test_wait_for_task_invalid_command_status(monkeypatch):

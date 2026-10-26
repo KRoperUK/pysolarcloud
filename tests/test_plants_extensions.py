@@ -1,5 +1,6 @@
 """Tests for the Plants extensions added in the KRoperUK fork."""
 
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -667,6 +668,37 @@ async def test_get_plant_devices_forwards_device_type_filter(auth, plants):
 
 
 @pytest.mark.asyncio
+async def test_get_plant_devices_tolerates_missing_fields(auth, plants):
+    """An entry lacking device_type and/or dev_fault_status is still listed, fields left unset (#130)."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {
+                "pageList": [
+                    {"device_name": "Full", "device_type": 1, "dev_fault_status": 4},
+                    {"device_name": "NoType", "dev_fault_status": 4},
+                    {"device_name": "NoFault", "device_type": 1},
+                    {"device_name": "Bare"},
+                ]
+            },
+        }
+    )
+
+    devices = await plants.async_get_plant_devices("123")
+
+    assert [d["device_name"] for d in devices] == ["Full", "NoType", "NoFault", "Bare"]
+    assert devices[0]["device_type"] is DeviceType.INVERTER
+    assert devices[0]["dev_fault_status"] is DeviceFaultStatus.NORMAL
+    assert "device_type" not in devices[1]
+    assert devices[1]["dev_fault_status"] is DeviceFaultStatus.NORMAL
+    assert devices[2]["device_type"] is DeviceType.INVERTER
+    assert "dev_fault_status" not in devices[2]
+    assert "device_type" not in devices[3]
+    assert "dev_fault_status" not in devices[3]
+
+
+@pytest.mark.asyncio
 async def test_get_plant_devices_leaves_unknown_codes_untouched(auth, plants):
     """Device/fault codes outside the enums pass through unchanged (no crash)."""
     auth.request.return_value = _mock_response(
@@ -734,6 +766,67 @@ async def test_device_realtime_skips_devices_without_uuid(auth, plants):
     data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-9"])
     assert set(data.keys()) == {"dev-9"}
     assert data["dev-9"]["power"]["value"] == 2000.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("interval", "expected"),
+    [
+        (timedelta(minutes=1), "1"),
+        (timedelta(minutes=60), "60"),
+        (timedelta(days=1), "1440"),
+        (timedelta(hours=25), "1500"),
+    ],
+)
+async def test_historical_data_interval_uses_total_minutes(auth, plants, interval, expected):
+    """Day-or-longer steps convert via total seconds; a 1-day step is 1440, not 0 (#120)."""
+    from datetime import datetime
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": []}}
+    )
+
+    await plants.async_get_historical_data("123", datetime(2024, 1, 1), interval=interval)
+
+    assert auth.request.call_args.args[1]["minute_interval"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval", [timedelta(seconds=59), timedelta(0), timedelta(minutes=-5)])
+async def test_historical_data_rejects_sub_minute_interval(auth, plants, interval):
+    """A step below one minute raises ValueError before any request is made (#120)."""
+    from datetime import datetime
+
+    with pytest.raises(ValueError, match="at least 1 minute"):
+        await plants.async_get_historical_data("123", datetime(2024, 1, 1), interval=interval)
+
+    auth.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unknown_measure_point_name_raises_value_error_on_both_paths(auth, plants):
+    """A typo'd point name raises ValueError naming the valid codes, not a bare KeyError (#122)."""
+    from datetime import datetime
+
+    pattern = r"Unknown measure point\(s\) \['powr'\].*valid codes are: .*\bpower\b"
+    with pytest.raises(ValueError, match=pattern):
+        await plants.async_get_realtime_data("123", measure_points=["powr"])
+    with pytest.raises(ValueError, match=pattern):
+        await plants.async_get_historical_data("123", datetime(2024, 1, 1), measure_points=["power", "powr"])
+
+    auth.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_realtime_extra_measure_point_names_remain_valid(auth, plants):
+    """Codes supplied via extra_measure_points are accepted by name in measure_points (#122)."""
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": [], "device_point_list": []}}
+    )
+
+    await plants.async_get_realtime_data("123", measure_points=["my_extra"], extra_measure_points={"99999": "my_extra"})
+
+    assert auth.request.call_args.args[1]["point_id_list"] == ["99999"]
 
 
 @pytest.mark.asyncio

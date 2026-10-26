@@ -30,7 +30,7 @@ from datetime import datetime
 from typing import Any
 
 from . import DeviceNotWritableError, PySolarCloudException
-from .control import Control
+from .control import Control, _read_all_with_fallback
 from .user_auth import UserAuth
 
 _LOGGER = logging.getLogger(__name__)
@@ -79,12 +79,22 @@ class UserControl:
     async def async_read_parameters(
         self, device_uuid: str, param_list: list[str] | None = None
     ) -> list[dict[str, Any]]:
-        """Read parameters (canonical names or raw codes) and wait for the task."""
+        """Read parameters (canonical names or raw codes) and wait for the task.
+
+        With no ``param_list`` every known config parameter is read in one bulk call; if the
+        device rejects it, the settings are read one at a time and the answered ones are
+        returned (see :func:`~pysolarcloud.control._read_all_with_fallback`). An explicit
+        ``param_list`` is never retried per setting: a rejection raises.
+        """
         if param_list is None:
-            codes = list(Control.config_parameters.keys())
-        else:
-            param_map = Control._param_code_map()
-            codes = [param_map.get(p, p) for p in param_list]
+            return await _read_all_with_fallback(
+                lambda codes: self._read_codes(device_uuid, codes), list(Control.config_parameters.keys())
+            )
+        param_map = Control._param_code_map()
+        return await self._read_codes(device_uuid, [param_map.get(p, p) for p in param_list])
+
+    async def _read_codes(self, device_uuid: str, codes: list[str]) -> list[dict[str, Any]]:
+        """Run one set_type 2 read task for raw param ``codes``."""
         plist = [{"param_code": str(c), "set_value": ""} for c in codes]
         return await self._run_task(device_uuid, set_type=2, param_list=plist, task_prefix="Readback")
 
