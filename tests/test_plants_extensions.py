@@ -668,6 +668,37 @@ async def test_get_plant_devices_forwards_device_type_filter(auth, plants):
 
 
 @pytest.mark.asyncio
+async def test_get_plant_devices_tolerates_missing_fields(auth, plants):
+    """An entry lacking device_type and/or dev_fault_status is still listed, fields left unset (#130)."""
+    auth.request.return_value = _mock_response(
+        {
+            "result_code": "1",
+            "result_msg": "success",
+            "result_data": {
+                "pageList": [
+                    {"device_name": "Full", "device_type": 1, "dev_fault_status": 4},
+                    {"device_name": "NoType", "dev_fault_status": 4},
+                    {"device_name": "NoFault", "device_type": 1},
+                    {"device_name": "Bare"},
+                ]
+            },
+        }
+    )
+
+    devices = await plants.async_get_plant_devices("123")
+
+    assert [d["device_name"] for d in devices] == ["Full", "NoType", "NoFault", "Bare"]
+    assert devices[0]["device_type"] is DeviceType.INVERTER
+    assert devices[0]["dev_fault_status"] is DeviceFaultStatus.NORMAL
+    assert "device_type" not in devices[1]
+    assert devices[1]["dev_fault_status"] is DeviceFaultStatus.NORMAL
+    assert devices[2]["device_type"] is DeviceType.INVERTER
+    assert "dev_fault_status" not in devices[2]
+    assert "device_type" not in devices[3]
+    assert "dev_fault_status" not in devices[3]
+
+
+@pytest.mark.asyncio
 async def test_get_plant_devices_leaves_unknown_codes_untouched(auth, plants):
     """Device/fault codes outside the enums pass through unchanged (no crash)."""
     auth.request.return_value = _mock_response(

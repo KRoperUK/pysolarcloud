@@ -160,10 +160,11 @@ class Plants:
             raise PySolarCloudException.from_response(data)
         devices: list[dict[str, Any]] = data["result_data"]["pageList"]
         for device in devices:
-            # Convert the device type and fault status to enums
-            if device["device_type"] in DeviceType:
+            # Convert the device type and fault status to enums. Either field can be absent on
+            # an entry; leave it unset rather than failing discovery for the whole plant (#130).
+            if device.get("device_type") in DeviceType:
                 device["device_type"] = DeviceType(device["device_type"])
-            if device["dev_fault_status"] in DeviceFaultStaus:
+            if device.get("dev_fault_status") in DeviceFaultStaus:
                 device["dev_fault_status"] = DeviceFaultStaus(device["dev_fault_status"])
         _LOGGER.debug("async_get_plant_devices: %s", devices)
         return devices
