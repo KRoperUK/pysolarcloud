@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Any, cast
+from typing import Any
 
 from . import (
     _LOGGER,
@@ -41,6 +41,105 @@ def _parse_command_status(raw: Any) -> int | None:
         return int(raw)
     except (TypeError, ValueError):
         return None
+
+
+# Shared by :class:`Control` (developer OAuth) and
+# :class:`~pysolarcloud.user_control.UserControl` (user-account session) so a fix lands in
+# both transports at once. The only transport difference is ``require_result_code``: the
+# OAuth replies always carry ``result_code``, whereas ``UserAuth.async_request`` has
+# already vetted the envelope (``result_code`` ``"1"`` *or* ``result_msg`` ``"success"``),
+# so a user-session reply may legitimately omit it.
+
+
+def _check_envelope(data: dict[str, Any], *, what: str, require_result_code: bool = True) -> None:
+    """Raise the most specific typed error if the reply envelope is not a success.
+
+    A ``result_code`` other than ``"1"`` goes through
+    :meth:`PySolarCloudException.from_response` so documented codes surface as
+    :class:`AuthError` / :class:`RateLimitError` (#64). An absent ``result_code`` is an
+    error (with ``what`` in the message, so debugging isn't reduced to a raw-dict print)
+    unless ``require_result_code`` is false.
+    """
+    result_code = data.get("result_code")
+    if result_code is not None and str(result_code) != "1":
+        raise PySolarCloudException.from_response(data)
+    if result_code is None and require_result_code:
+        raise PySolarCloudException(f"{what}: missing result_code ({data})")
+
+
+def _check_param_reply(
+    device_uuid: str, data: dict[str, Any], *, action: str, require_result_code: bool = True
+) -> None:
+    """Validate a ``paramSetting`` submit reply; raise the most specific typed error.
+
+    Three distinct failure modes come out of this one endpoint and callers historically
+    collapsed them into a single stringly-typed ``PySolarCloudException``:
+
+    1. Envelope failure — see :func:`_check_envelope`.
+    2. Overall ``check_result`` rejection, or a missing ``dev_result_list`` — descriptive
+       message; there is no documented API error code on this path.
+    3. Per-device rejection (``dev_result_list[0]["code"] != "1"``, or no ``task_id`` to
+       poll) — raise the targeted :class:`DeviceNotWritableError` so consumers can silently
+       skip a device that doesn't accept the write instead of retrying blindly (#63).
+    """
+    what = f"Could not {action} parameters of device {device_uuid}"
+    _check_envelope(data, what=what, require_result_code=require_result_code)
+    result_data = data.get("result_data") or {}
+    if str(result_data.get("check_result")) != "1":
+        raise PySolarCloudException(f"{what}: check_result={result_data.get('check_result')!r} ({data})")
+    dev_list = result_data.get("dev_result_list") or []
+    if not dev_list:
+        raise PySolarCloudException(f"{what}: response missing dev_result_list ({data})")
+    device_code = str(dev_list[0].get("code"))
+    if device_code != _DEVICE_TASK_ACCEPTED or not dev_list[0].get("task_id"):
+        _LOGGER.debug("paramSetting rejected by device %s (code=%s) on %s", device_uuid, device_code, action)
+        raise DeviceNotWritableError(data, device_code=device_code)
+
+
+def _check_support_reply(data: dict[str, Any], *, require_result_code: bool = True) -> bool:
+    """Interpret a ``paramSettingCheck`` reply: ``True`` if the device supports the operation.
+
+    "Unsupported" is an answer, not an error, so it returns ``False`` rather than raising
+    (aligned across both transports; :meth:`Control.async_param_config_verification`
+    used to raise here while ``UserControl`` returned ``False``). Only a failed envelope
+    raises (:func:`_check_envelope`). A top-level ``check_result`` other than ``"1"`` is
+    ``False``; some replies carry no per-device list and only the top-level answer, which
+    is then taken as the result; otherwise the first device's ``check_result`` decides.
+    """
+    _check_envelope(data, what="Could not check parameter support", require_result_code=require_result_code)
+    result = data.get("result_data") or {}
+    if str(result.get("check_result")) != "1":
+        return False
+    devices = result.get("dev_result_list") or []
+    if not devices:
+        return True
+    return str(devices[0].get("check_result")) == "1"
+
+
+def _interpret_task_reply(
+    task_id: str, data: dict[str, Any], *, require_result_code: bool = True
+) -> list[dict[str, Any]] | None:
+    """Classify one ``getParamSettingTask`` reply.
+
+    Returns ``None`` while the task is still running, the (possibly empty) ``param_list``
+    once it succeeded, and raises :class:`PySolarCloudException` otherwise: a failed
+    envelope is classified via ``from_response`` (#64); a "success" envelope with any other
+    ``command_status`` keeps a descriptive message. ``command_status`` is parsed with
+    :func:`_parse_command_status`, so a quoted status is the same as a number (#121).
+    """
+    result_code = data.get("result_code")
+    envelope_ok = str(result_code) == "1" or (result_code is None and not require_result_code)
+    result = data.get("result_data") or {}
+    status = _parse_command_status(result.get("command_status")) if envelope_ok else None
+    if status == _TASK_RUNNING:
+        return None
+    if status == _TASK_SUCCESS:
+        params = result.get("param_list") or []
+        return list(params) if isinstance(params, list) else []
+    _LOGGER.error("Task not successful %s: %s", task_id, data)
+    if not envelope_ok:
+        raise PySolarCloudException.from_response(data)
+    raise PySolarCloudException(f"Task not successful {task_id}: {data}")
 
 
 async def _read_all_with_fallback(
@@ -86,68 +185,33 @@ class Control:
         self.lang = lang
 
     async def async_param_config_verification(self, device_uuid: str, set_type: int) -> bool:
-        """Verifies whether the device supports parameter configuration."""
+        """Verify whether the device supports parameter configuration.
+
+        Returns ``True`` if supported and ``False`` if the device (or account) does not
+        support it — "unsupported" is an answer, not an error, and :class:`UserControl`
+        behaves the same. Only a failed reply envelope raises (a documented ``result_code``
+        surfaces as the typed subclass: E00003 → :class:`AuthError`, E998/E999 →
+        :class:`RateLimitError`, ... (#64)).
+        """
         uri = "/openapi/platform/paramSettingCheck"
         res = await self.auth.request(uri, {"set_type": set_type, "uuid": str(device_uuid)}, lang=self.lang)
         res.raise_for_status()
         data = await res.json()
         _LOGGER.debug("async_param_config_verification: %s", data)
-        if data.get("result_code") == "1" and data["result_data"]["check_result"] == "1":
-            supported = data["result_data"]["dev_result_list"][0]["check_result"]
-            return bool(supported == "1")
-        # Envelope failure — route through ``from_response`` so a documented result_code
-        # (E00003 → AuthError, E998/E999 → RateLimitError, ...) surfaces as the right
-        # typed subclass instead of a stringly-typed base exception (#64).
-        raise PySolarCloudException.from_response(data)
+        return _check_support_reply(data)
 
     async def async_check_read_support(self, device_uuid: str) -> bool:
         """Check if the device supports read operations."""
         return await self.async_param_config_verification(device_uuid, 2)
 
     async def async_check_update_support(self, device_uuid: str) -> bool:
-        """Check if the device supports read operations."""
+        """Check if the device supports update operations."""
         return await self.async_param_config_verification(device_uuid, 0)
 
     @staticmethod
     def _raise_for_param_response(device_uuid: str, data: dict[str, Any], *, action: str) -> None:
-        """Validate a paramSetting response envelope; raise the most specific typed error.
-
-        Three distinct failure modes come out of this one endpoint and callers historically
-        collapsed them into a single stringly-typed ``PySolarCloudException``:
-
-        1. Envelope failure (``result_code != "1"``) — route through
-           :meth:`PySolarCloudException.from_response` so documented codes surface as
-           :class:`AuthError` / :class:`RateLimitError` (#64). A malformed response with
-           no ``result_code`` at all keeps the descriptive message so debugging isn't
-           reduced to a raw-dict print.
-        2. Overall ``check_result`` rejection — descriptive message; there is no
-           documented API error code on this path.
-        3. Per-device rejection (``dev_result_list[0]["code"] != "1"``) — raise the
-           targeted :class:`DeviceNotWritableError` so consumers can silently skip a
-           device that doesn't accept the write instead of retrying blindly (#63).
-        """
-        result_code = data.get("result_code")
-        if result_code is not None and result_code != "1":
-            raise PySolarCloudException.from_response(data)
-        result_data = data.get("result_data") or {}
-        if result_code is None:
-            raise PySolarCloudException(
-                f"Could not {action} parameters of device {device_uuid}: missing result_code ({data})"
-            )
-        if result_data.get("check_result") != "1":
-            raise PySolarCloudException(
-                f"Could not {action} parameters of device {device_uuid}: "
-                f"check_result={result_data.get('check_result')!r} ({data})"
-            )
-        dev_list = result_data.get("dev_result_list") or []
-        if not dev_list:
-            raise PySolarCloudException(
-                f"Could not {action} parameters of device {device_uuid}: response missing dev_result_list ({data})"
-            )
-        device_code = str(dev_list[0].get("code"))
-        if device_code != _DEVICE_TASK_ACCEPTED:
-            _LOGGER.debug("paramSetting rejected by device %s (code=%s) on %s", device_uuid, device_code, action)
-            raise DeviceNotWritableError(data, device_code=device_code)
+        """Validate a paramSetting response envelope; see :func:`_check_param_reply`."""
+        _check_param_reply(device_uuid, data, action=action)
 
     async def wait_for_task(
         self, device_uuid: str, task_id: str, *, timeout: float = _EXPIRE_SECONDS
@@ -171,25 +235,13 @@ class Control:
             res.raise_for_status()
             data = await res.json()
             _LOGGER.debug("wait_for_task: %s", data)
-            # command_status arrives as a number or as quoted text ("8"); compare as an int
-            # so a finished task reported as text still returns its result (#121).
-            status = _parse_command_status((data.get("result_data") or {}).get("command_status"))
-            if data.get("result_code") == "1" and status == _TASK_RUNNING:
-                # Task is still running
-                if asyncio.get_running_loop().time() >= deadline:
-                    raise PySolarCloudException(f"Timed out waiting for task {task_id} to complete after {timeout}s")
-                await asyncio.sleep(_POLL_INTERVAL)
-                continue
-            elif data.get("result_code") == "1" and status == _TASK_SUCCESS:
-                return cast(list[dict[str, Any]], data["result_data"]["param_list"])
-            else:
-                _LOGGER.error("Task not successful %s: %s", task_id, data)
-                # Envelope-level failure gets typed classification (#64); a "success"
-                # envelope with a bad command_status stays as the base exception with
-                # a descriptive message.
-                if data.get("result_code") != "1":
-                    raise PySolarCloudException.from_response(data)
-                raise PySolarCloudException(f"Task not successful {task_id}: {data}")
+            rows = _interpret_task_reply(task_id, data)
+            if rows is not None:
+                return rows
+            # Task is still running
+            if asyncio.get_running_loop().time() >= deadline:
+                raise PySolarCloudException(f"Timed out waiting for task {task_id} to complete after {timeout}s")
+            await asyncio.sleep(_POLL_INTERVAL)
 
     async def async_read_parameters(
         self, device_uuid: str, param_list: list[str] | None = None

@@ -296,7 +296,7 @@ async def test_read_all_raises_when_bulk_and_every_single_read_rejected(monkeypa
     )
     control = UserControl(auth)
 
-    with pytest.raises(PySolarCloudException, match="rejected"):
+    with pytest.raises(PySolarCloudException, match="check_result"):
         await control.async_read_parameters("9")
 
     assert auth.async_request.await_count == 1 + len(Control.config_parameters)
@@ -327,3 +327,43 @@ async def test_wait_for_task_invalid_command_status(monkeypatch):
     control = UserControl(auth)
     with pytest.raises(PySolarCloudException, match="not successful"):
         await control.async_read_parameters("9", ["10011"])
+
+
+async def test_wait_for_task_coerces_quoted_status(monkeypatch):
+    """A quoted running/done status behaves like the number on the user transport (#121, #125)."""
+    auth = _auth()
+    auth.async_request = AsyncMock(side_effect=[_ok_submit(), _ok_task("2", []), _ok_task("8")])
+    monkeypatch.setattr("pysolarcloud.user_control.asyncio.sleep", AsyncMock())
+    control = UserControl(auth)
+
+    rows = await control.async_read_parameters("9", ["10011"])
+
+    assert len(rows) == 1
+    assert auth.async_request.await_count == 3
+
+
+async def test_support_check_unsupported_is_false_and_envelope_failure_raises():
+    """Unsupported settings return False on the user transport; only a failed envelope raises (#125)."""
+    from pysolarcloud import AuthError
+
+    auth = _auth()
+    auth.async_request = AsyncMock(
+        side_effect=[
+            {"result_code": "1", "result_data": {"check_result": "0"}},
+            {"result_code": "E00003", "result_msg": "er_token_login_invalid"},
+        ]
+    )
+    control = UserControl(auth)
+
+    assert await control.async_check_read_support("9") is False
+    with pytest.raises(AuthError):
+        await control.async_check_read_support("9")
+
+
+def test_both_control_classes_use_the_shared_helpers():
+    """Both transports call the one parser/envelope checker defined in control.py (#125)."""
+    from pysolarcloud import control as control_module
+    from pysolarcloud import user_control as user_control_module
+
+    for name in ("_check_param_reply", "_check_support_reply", "_interpret_task_reply"):
+        assert getattr(user_control_module, name) is getattr(control_module, name)

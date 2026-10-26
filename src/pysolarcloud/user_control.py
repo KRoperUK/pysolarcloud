@@ -29,8 +29,14 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from . import DeviceNotWritableError, PySolarCloudException
-from .control import Control, _read_all_with_fallback
+from . import PySolarCloudException
+from .control import (
+    Control,
+    _check_param_reply,
+    _check_support_reply,
+    _interpret_task_reply,
+    _read_all_with_fallback,
+)
 from .user_auth import UserAuth
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,9 +48,6 @@ _PATH_TASK = "/openapi/getParamSettingTask"
 
 _EXPIRE_SECONDS = 120
 _POLL_INTERVAL = 5
-# command_status: 2 running, 8 success (OpenAPI Appendix / live observation).
-_TASK_RUNNING = 2
-_TASK_SUCCESS = 8
 
 
 class UserControl:
@@ -55,26 +58,20 @@ class UserControl:
 
     async def async_check_update_support(self, device_uuid: str) -> bool:
         """Return whether the device accepts parameter updates (set_type 0)."""
-        data = await self.auth.async_request(_PATH_CHECK, {"set_type": 0, "uuid": str(device_uuid)})
-        result = data.get("result_data") or {}
-        if str(result.get("check_result")) != "1":
-            return False
-        devices = result.get("dev_result_list") or []
-        if not devices:
-            # Some user-token responses only set top-level check_result.
-            return True
-        return str(devices[0].get("check_result")) == "1"
+        return await self._check_support(device_uuid, 0)
 
     async def async_check_read_support(self, device_uuid: str) -> bool:
-        """Return whether the device accepts parameter read-back (set_type 2)."""
-        data = await self.auth.async_request(_PATH_CHECK, {"set_type": 2, "uuid": str(device_uuid)})
-        result = data.get("result_data") or {}
-        if str(result.get("check_result")) != "1":
-            return False
-        devices = result.get("dev_result_list") or []
-        if not devices:
-            return True
-        return str(devices[0].get("check_result")) == "1"
+        """Return whether the device accepts parameter read-back (set_type 2).
+
+        Like :meth:`async_check_update_support` (and
+        :meth:`Control.async_param_config_verification`), an unsupported device is
+        ``False``, not an error; only a failed reply envelope raises.
+        """
+        return await self._check_support(device_uuid, 2)
+
+    async def _check_support(self, device_uuid: str, set_type: int) -> bool:
+        data = await self.auth.async_request(_PATH_CHECK, {"set_type": set_type, "uuid": str(device_uuid)})
+        return _check_support_reply(data, require_result_code=False)
 
     async def async_read_parameters(
         self, device_uuid: str, param_list: list[str] | None = None
@@ -124,31 +121,12 @@ class UserControl:
             "param_list": param_list,
         }
         data = await self.auth.async_request(_PATH_SETTING, body)
-        # Envelope-level failure (result_code != "1") goes through ``from_response`` for
-        # typed AuthError/RateLimitError classification (#64). Absent result_code stays
-        # with the descriptive message so debugging isn't reduced to a raw-dict print.
-        result_code = data.get("result_code")
-        if result_code is not None and str(result_code) != "1":
-            raise PySolarCloudException.from_response(data)
-        result = data.get("result_data") or {}
+        # Shared reply checker (also used by Control). ``require_result_code=False``: the
+        # user session already vetted the envelope as a success (``result_code`` "1" or
+        # ``result_msg`` "success"), so a reply without ``result_code`` is fine here.
         # check_result "1" = accepted; "9" = do not repeat (rate limit); others = reject.
-        if str(result.get("check_result")) != "1":
-            raise PySolarCloudException(
-                f"paramSetting rejected for {device_uuid} (check_result={result.get('check_result')!r}): {data}"
-            )
-        dev_list = result.get("dev_result_list") or []
-        if not dev_list:
-            raise PySolarCloudException(f"paramSetting missing dev_result_list for {device_uuid}: {data}")
-        device_result = dev_list[0]
-        # Per-device rejection: the envelope was OK but this specific device won't accept
-        # the write (permission-gated, EV charger, meter, unsupported). Raise the targeted
-        # ``DeviceNotWritableError`` so consumers can silently skip the device instead of
-        # retrying blindly (#63).
-        device_code = str(device_result.get("code"))
-        if device_code != "1" or not device_result.get("task_id"):
-            _LOGGER.debug("paramSetting rejected by device %s (code=%s)", device_uuid, device_code)
-            raise DeviceNotWritableError(data, device_code=device_code)
-        task_id = str(device_result["task_id"])
+        _check_param_reply(device_uuid, data, action="read" if set_type == 2 else "update", require_result_code=False)
+        task_id = str(data["result_data"]["dev_result_list"][0]["task_id"])
         rows = await self._wait_for_task(device_uuid, task_id)
         # Prefer return_value on read-back; fall back to set_value (write confirmation).
         # Reuse Control's readout formatter (a staticmethod over class attributes).
@@ -167,24 +145,10 @@ class UserControl:
         await asyncio.sleep(2)
         while True:
             data = await self.auth.async_request(_PATH_TASK, {"task_id": str(task_id), "uuid": str(device_uuid)})
-            result = data.get("result_data") or {}
-            try:
-                status = int(result.get("command_status", -1))
-            except (TypeError, ValueError):
-                status = -1
-            _LOGGER.debug("UserControl wait_for_task %s status=%s", task_id, status)
-            if status == _TASK_RUNNING:
-                if asyncio.get_running_loop().time() >= deadline:
-                    raise PySolarCloudException(f"Timed out waiting for task {task_id} after {timeout}s")
-                await asyncio.sleep(_POLL_INTERVAL)
-                continue
-            if status == _TASK_SUCCESS:
-                params = result.get("param_list") or []
-                return list(params) if isinstance(params, list) else []
-            _LOGGER.error("Task not successful %s: %s", task_id, data)
-            # Envelope-level failure gets typed classification (#64); a "success"
-            # envelope with a bad command_status stays as the base exception with a
-            # descriptive message.
-            if data.get("result_code") != "1":
-                raise PySolarCloudException.from_response(data)
-            raise PySolarCloudException(f"Task not successful {task_id}: {data}")
+            _LOGGER.debug("UserControl wait_for_task %s: %s", task_id, data)
+            rows = _interpret_task_reply(task_id, data, require_result_code=False)
+            if rows is not None:
+                return rows
+            if asyncio.get_running_loop().time() >= deadline:
+                raise PySolarCloudException(f"Timed out waiting for task {task_id} after {timeout}s")
+            await asyncio.sleep(_POLL_INTERVAL)

@@ -218,6 +218,47 @@ async def test_param_config_verification_false_when_unsupported(auth, control):
 
 
 @pytest.mark.asyncio
+async def test_read_parameters_accepted_without_task_id_is_device_not_writable(auth, control):
+    """An accepted submit with no task_id to poll raises the typed error, not a KeyError (#125)."""
+    from pysolarcloud import DeviceNotWritableError
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_data": {"check_result": "1", "dev_result_list": [{"code": "1"}]}}
+    )
+
+    with pytest.raises(DeviceNotWritableError):
+        await control.async_read_parameters("dev-1", ["soc_upper_limit"])
+
+
+@pytest.mark.asyncio
+async def test_param_config_verification_top_level_unsupported_is_false(auth, control):
+    """A top-level check_result != "1" is "unsupported" -> False, as on the user transport (#125).
+
+    This used to raise a base exception whose message was just the result_code.
+    """
+    auth.request.return_value = _mock_response({"result_code": "1", "result_data": {"check_result": "0"}})
+
+    assert await control.async_param_config_verification("dev-1", 0) is False
+
+
+@pytest.mark.asyncio
+async def test_param_config_verification_top_level_only_reply_is_supported(auth, control):
+    """A reply with only the top-level answer (no dev_result_list) used to IndexError; now True (#125)."""
+    auth.request.return_value = _mock_response({"result_code": "1", "result_data": {"check_result": "1"}})
+
+    assert await control.async_param_config_verification("dev-1", 0) is True
+
+
+@pytest.mark.asyncio
+async def test_param_config_verification_missing_result_code_raises(auth, control):
+    """OAuth replies must carry result_code; its absence is an error, not 'unsupported'."""
+    auth.request.return_value = _mock_response({"result_data": {"check_result": "1"}})
+
+    with pytest.raises(PySolarCloudException, match="missing result_code"):
+        await control.async_param_config_verification("dev-1", 0)
+
+
+@pytest.mark.asyncio
 async def test_param_config_verification_raises_on_error(auth, control):
     """A result_code != "1" raises rather than reporting unsupported."""
     auth.request.return_value = _mock_response({"result_code": "E00003", "result_data": None})
