@@ -545,6 +545,10 @@ class Plants:
         }
         """
         ps = plant_id if isinstance(plant_id, list) else [plant_id]
+        # ``timedelta.seconds`` ignores whole days (a 1-day step would send 0), so use total seconds.
+        interval_minutes = int(interval.total_seconds() // 60)
+        if interval_minutes < 1:
+            raise ValueError(f"interval must be at least 1 minute, got {interval}")
         if measure_points is None:
             ms = list(self.measure_points.keys())
         else:
@@ -560,7 +564,7 @@ class Plants:
             "is_get_point_dict": "1",
             "start_time_stamp": start_time.strftime(TS_FORMAT),
             "end_time_stamp": end_time.strftime(TS_FORMAT),
-            "minute_interval": str(interval.seconds // 60),
+            "minute_interval": str(interval_minutes),
         }
         res = await self.auth.request(uri, params, lang=self.lang)
         res.raise_for_status()

@@ -1,5 +1,6 @@
 """Tests for the Plants extensions added in the KRoperUK fork."""
 
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -734,6 +735,41 @@ async def test_device_realtime_skips_devices_without_uuid(auth, plants):
     data = await plants.async_get_device_realtime("123", DeviceType.METER, ps_key_list=["dev-9"])
     assert set(data.keys()) == {"dev-9"}
     assert data["dev-9"]["power"]["value"] == 2000.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("interval", "expected"),
+    [
+        (timedelta(minutes=1), "1"),
+        (timedelta(minutes=60), "60"),
+        (timedelta(days=1), "1440"),
+        (timedelta(hours=25), "1500"),
+    ],
+)
+async def test_historical_data_interval_uses_total_minutes(auth, plants, interval, expected):
+    """Day-or-longer steps convert via total seconds; a 1-day step is 1440, not 0 (#120)."""
+    from datetime import datetime
+
+    auth.request.return_value = _mock_response(
+        {"result_code": "1", "result_msg": "success", "result_data": {"point_dict": []}}
+    )
+
+    await plants.async_get_historical_data("123", datetime(2024, 1, 1), interval=interval)
+
+    assert auth.request.call_args.args[1]["minute_interval"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval", [timedelta(seconds=59), timedelta(0), timedelta(minutes=-5)])
+async def test_historical_data_rejects_sub_minute_interval(auth, plants, interval):
+    """A step below one minute raises ValueError before any request is made (#120)."""
+    from datetime import datetime
+
+    with pytest.raises(ValueError, match="at least 1 minute"):
+        await plants.async_get_historical_data("123", datetime(2024, 1, 1), interval=interval)
+
+    auth.request.assert_not_called()
 
 
 @pytest.mark.asyncio
