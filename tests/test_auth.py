@@ -283,6 +283,28 @@ async def test_async_authorize_stores_tokens_on_success():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reply", "missing"),
+    [
+        ({"access_token": "a", "expires_in": 3600}, "refresh_token"),
+        ({"access_token": "a", "refresh_token": "", "expires_in": 3600}, "refresh_token"),
+        ({"access_token": "a", "refresh_token": "b"}, "expires_in"),
+    ],
+)
+async def test_async_authorize_rejects_partial_reply_naming_field(reply, missing):
+    """A first-login reply lacking refresh_token / expires_in raises AuthError naming it (#119)."""
+    auth = _auth()
+    auth.async_fetch_tokens = AsyncMock(return_value=reply)
+
+    with pytest.raises(AuthError) as exc:
+        await auth.async_authorize("code", "https://cb")
+
+    assert missing in str(exc.value)
+    assert exc.value.error == "authorization_failed"
+    assert auth.tokens is None
+
+
+@pytest.mark.asyncio
 async def test_async_authorize_raises_when_no_access_token():
     """A fetch response without an access token raises AuthError."""
     auth = _auth()

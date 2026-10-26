@@ -70,6 +70,59 @@ async def test_post_encrypts_and_decrypts_round_trip(monkeypatch):
     assert headers["x-random-secret-key"]  # RSA-encrypted AES key present
 
 
+async def test_post_wraps_garbled_reply_in_typed_exception(monkeypatch):
+    """A non-hex or non-JSON reply raises PySolarCloudException naming the endpoint (#127)."""
+    fixed_key = "web0123456789abc"
+    monkeypatch.setattr(ua, "_random_aes_key", lambda: fixed_key)
+    not_json = ua._aes_encrypt({"a": 1}, "web999999999999z")  # valid hex, wrong key
+    for body in ("<html>Service unavailable</html>", not_json, ""):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.text = AsyncMock(return_value=body)
+        session = MagicMock()
+        session.request = AsyncMock(return_value=resp)
+
+        with pytest.raises(PySolarCloudException) as exc:
+            await _auth(session)._post("/v1/userService/login", {"user_account": "x"}, user_id="")
+
+        assert exc.value.error == "user_response_undecodable"
+        assert "/v1/userService/login" in str(exc.value)
+        assert isinstance(exc.value.__cause__, ValueError)
+
+
+async def test_post_parses_login_key_once_per_session(monkeypatch):
+    """The PEM is parsed once for many requests; request behaviour is unchanged (#131)."""
+    monkeypatch.setattr(ua, "_random_aes_key", lambda: "web0123456789abc")
+    parses = 0
+    real_load = ua._load_public_key
+
+    def counting_load(pem):
+        nonlocal parses
+        parses += 1
+        return real_load(pem)
+
+    monkeypatch.setattr(ua, "_load_public_key", counting_load)
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.text = AsyncMock(return_value=ua._aes_encrypt({"result_msg": "success"}, "web0123456789abc"))
+    session = MagicMock()
+    session.request = AsyncMock(return_value=resp)
+    auth = _auth(session)
+
+    for _ in range(3):
+        assert await auth._post("/v1/x", {}, user_id="42") == {"result_msg": "success"}
+
+    assert parses == 1
+    headers = session.request.call_args.kwargs["headers"]
+    assert len(base64.b64decode(headers["x-random-secret-key"])) == 128
+    assert len(base64.b64decode(headers["x-limit-obj"])) == 128
+
+    # Reassigning the PEM invalidates the cache rather than silently using the old key.
+    auth.public_key_pem = ua.PUBLIC_KEY_PEM + "\n"
+    await auth._post("/v1/x", {}, user_id="42")
+    assert parses == 2
+
+
 async def test_post_uses_custom_sys_code(monkeypatch):
     """A sys_code kwarg overrides the default web value on the wire (#91)."""
     fixed_key = "web0123456789abc"
@@ -159,6 +212,20 @@ async def test_login_state_one_with_token_succeeds():
     assert auth.user_id == "42"
 
 
+async def test_login_without_user_id_raises_auth_error():
+    """A success reply that omits the account id fails at login, not with user_id == "None" (#133)."""
+    from pysolarcloud import AuthError
+
+    for result_data in ({"login_state": "1", "token": "T"}, {"login_state": "1", "token": "T", "user_id": ""}):
+        auth = _auth()
+        auth._post = AsyncMock(return_value={"result_code": "1", "result_msg": "success", "result_data": result_data})
+
+        with pytest.raises(AuthError, match="user_id"):
+            await auth.async_login()
+        assert auth.token is None
+        assert auth.user_id is None
+
+
 async def test_get_token_logs_in_once_under_concurrency():
     """Concurrent callers trigger exactly one login (serialised)."""
     auth = _auth()
@@ -231,6 +298,22 @@ async def test_request_re_logs_in_on_invalid_token():
     auth.async_login.assert_awaited_once()
     assert auth._post.await_count == 2
     assert out["result_data"] == {"ok": True}
+
+
+async def test_success_envelope_does_not_trigger_re_login():
+    """The success code never re-logs in, and only a genuinely invalid-token code is listed (#128)."""
+    assert frozenset({"E00003"}) == ua._LOGIN_INVALID_CODES
+
+    auth = _auth()
+    auth.token = "T"
+    auth.user_id = "42"
+    auth._post = AsyncMock(return_value={"result_code": "1", "result_msg": "success", "result_data": {}})
+    auth.async_login = AsyncMock()
+
+    await auth.async_request("/v1/foo")
+
+    auth.async_login.assert_not_called()
+    assert auth._post.await_count == 1
 
 
 async def test_get_plants_returns_page_list():

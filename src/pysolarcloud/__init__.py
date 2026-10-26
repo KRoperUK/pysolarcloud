@@ -222,6 +222,17 @@ class Auth(AbstractAuth):
         if "access_token" not in ts:
             _LOGGER.error("Authorization failed: %s", str(ts))
             raise AuthError({"error": "authorization_failed", "error_description": str(ts)})
+        # A partial reply (e.g. an access token but no refresh token) would otherwise surface
+        # as a bare KeyError / store a token set that cannot be refreshed. Name the field.
+        for field in ("refresh_token", "expires_in"):
+            if ts.get(field) in (None, ""):
+                _LOGGER.error("Authorization reply missing %s", field)
+                raise AuthError(
+                    {
+                        "error": "authorization_failed",
+                        "error_description": f"Token reply is missing '{field}'",
+                    }
+                )
         self.tokens = {
             "access_token": ts["access_token"],
             "refresh_token": ts["refresh_token"],
