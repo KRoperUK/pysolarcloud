@@ -19,6 +19,14 @@ def _auth() -> Auth:
     )
 
 
+def test_auth_accepts_server_enum_host():
+    """``Auth`` takes a ``Server`` member as well as a string, like ``AbstractAuth`` (#123)."""
+    auth = Auth(Server.Europe, appkey="k", access_key="s", app_id="1", websession=MagicMock())
+
+    assert auth.host == Server.Europe.value
+    assert type(auth.host) is str
+
+
 @pytest.mark.asyncio
 async def test_refresh_failure_raises_token_refresh_error():
     """A refresh response without an access token raises TokenRefreshError, not KeyError."""
