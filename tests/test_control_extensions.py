@@ -383,6 +383,13 @@ def test_format_param_readout_coerces_plain_numeric_value(control):
     assert readout["unit"] == "%"
 
 
+def test_format_param_readout_is_a_plain_static_call():
+    """The formatter needs no instance: UserControl calls it on the class (#134)."""
+    readout = Control._format_param_readout({"param_code": "10001", "point_name": "SOC Upper"}, "900")
+    assert readout["code"] == "soc_upper_limit"
+    assert readout["value"] == 900.0
+
+
 @pytest.mark.asyncio
 async def test_heartbeat_loop_rejects_invalid_interval(auth, control):
     """heartbeat_loop validates the interval before entering the loop."""

@@ -141,13 +141,13 @@ class UserControl:
         task_id = str(device_result["task_id"])
         rows = await self._wait_for_task(device_uuid, task_id)
         # Prefer return_value on read-back; fall back to set_value (write confirmation).
-        # Reuse Control's readout formatter (class attrs only; pass Control as self).
+        # Reuse Control's readout formatter (a staticmethod over class attributes).
         out: list[dict[str, Any]] = []
         for param in rows:
             value = param.get("return_value")
             if value is None or value == "":
                 value = param.get("set_value", "")
-            out.append(Control._format_param_readout(Control, param, str(value)))  # type: ignore[arg-type]
+            out.append(Control._format_param_readout(param, str(value)))
         return out
 
     async def _wait_for_task(
