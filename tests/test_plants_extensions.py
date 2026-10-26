@@ -500,6 +500,25 @@ async def test_get_open_point_info_posts_expected_params(auth, plants):
 
 
 @pytest.mark.asyncio
+async def test_raw_result_data_wrappers_pass_list_replies_through(auth, plants):
+    """A list-shaped ``result_data`` is returned as-is, matching the ``dict | list`` return tags (#126)."""
+    rows = [{"point_id": "83022", "point_name": "Daily Yield"}]
+    auth.request.return_value = _mock_response({"result_code": "1", "result_msg": "success", "result_data": rows})
+
+    assert await plants.async_get_open_point_info() == rows
+    assert await plants.async_get_dev_property_point_value("123", "14", ["29046"]) == rows
+
+
+@pytest.mark.asyncio
+async def test_raw_result_data_wrappers_default_to_empty_map(auth, plants):
+    """An absent ``result_data`` still yields an empty map (unchanged behaviour)."""
+    auth.request.return_value = _mock_response({"result_code": "1", "result_msg": "success", "result_data": None})
+
+    assert await plants.async_get_open_point_info() == {}
+    assert await plants.async_get_dev_property_point_value("123", "14", ["29046"]) == {}
+
+
+@pytest.mark.asyncio
 async def test_get_open_point_info_omits_device_type_when_absent(auth, plants):
     """When no device type is supplied the request body omits it."""
     auth.request.return_value = _mock_response(

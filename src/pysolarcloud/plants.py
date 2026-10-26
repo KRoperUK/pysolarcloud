@@ -426,7 +426,7 @@ class Plants:
 
     async def async_get_dev_property_point_value(
         self, plant_id: str, device_type: DeviceType | int | str, point_ids: list[str]
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[Any]:
         """Return device property point values (e.g. per-device charge/discharge/feed-in limits).
 
         Appendix 10 (Control Parameter Definitions) documents that the dispatch bounds for several
@@ -443,7 +443,8 @@ class Plants:
             System). Normalised to its numeric string form.
         point_ids: list[str] - The property point IDs to read.
 
-        Returns the raw ``result_data`` object from the API (shape is device/point dependent).
+        Returns the raw ``result_data`` object from the API: a map or a list, since the shape is
+        device/point dependent (or ``{}`` when the reply carries none).
 
         .. note::
             The iSolarCloud docs reference this endpoint by name and by point ID but do not publish
@@ -468,9 +469,11 @@ class Plants:
             _LOGGER.error("Error response from %s: %s", uri, res)
             raise PySolarCloudException.from_response(res)
         _LOGGER.debug("async_get_dev_property_point_value: %s", res.get("result_data"))
-        return cast(dict[str, Any], res.get("result_data") or {})
+        return cast(dict[str, Any] | list[Any], res.get("result_data") or {})
 
-    async def async_get_open_point_info(self, device_type: DeviceType | int | str | None = None) -> dict[str, Any]:
+    async def async_get_open_point_info(
+        self, device_type: DeviceType | int | str | None = None
+    ) -> dict[str, Any] | list[Any]:
         """Return the available open measuring-point definitions.
 
         The common measuring-point pages (e.g. "Common Plant Measuring Points") note that additional
@@ -481,7 +484,8 @@ class Plants:
         device_type: DeviceType | int | str | None - Optionally scope the definitions to a single
             device type. When omitted, the device-type filter is not sent.
 
-        Returns the raw ``result_data`` object from the API (a list/map of point definitions).
+        Returns the raw ``result_data`` object from the API: a map or a list of point
+        definitions (the docs do not say which), or ``{}`` when the reply carries none.
 
         .. note::
             The docs reference this endpoint by name only and do not publish a full request schema.
@@ -500,7 +504,7 @@ class Plants:
             _LOGGER.error("Error response from %s: %s", uri, res)
             raise PySolarCloudException.from_response(res)
         _LOGGER.debug("async_get_open_point_info: %s", res.get("result_data"))
-        return cast(dict[str, Any], res.get("result_data") or {})
+        return cast(dict[str, Any] | list[Any], res.get("result_data") or {})
 
     async def async_get_historical_data(
         self,
