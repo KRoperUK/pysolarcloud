@@ -301,6 +301,44 @@ async def test_read_parameters_defaults_to_all_config_parameters(auth, control):
 
 
 @pytest.mark.asyncio
+async def test_wait_for_task_coerces_quoted_status(auth, control):
+    """A status sent as text ("8" done, "2" running) is treated like the number (#121)."""
+    running = _mock_response({"result_code": "1", "result_data": {"command_status": "2"}})
+    done = _mock_response(
+        {"result_code": "1", "result_data": {"command_status": "8", "param_list": [{"param_code": "10005"}]}}
+    )
+    auth.request.side_effect = [running, done]
+    with patch("pysolarcloud.control.asyncio.sleep", new=AsyncMock()):
+        result = await control.wait_for_task("dev-1", "t-1", timeout=100)
+
+    assert result == [{"param_code": "10005"}]
+    assert auth.request.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_wait_for_task_quoted_running_status_still_times_out(auth, control):
+    """A quoted running status keeps polling until the deadline, then raises (#121)."""
+    auth.request.return_value = _mock_response({"result_code": "1", "result_data": {"command_status": "2"}})
+    with (
+        patch("pysolarcloud.control.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(PySolarCloudException, match="[Tt]imed out"),
+    ):
+        await control.wait_for_task("dev-1", "t-1", timeout=0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [5, "5", "nope", None])
+async def test_wait_for_task_failed_or_unparseable_status_raises_not_successful(auth, control, status):
+    """Failed or unparseable statuses raise the (correctly spelled) 'not successful' error (#121)."""
+    auth.request.return_value = _mock_response({"result_code": "1", "result_data": {"command_status": status}})
+    with (
+        patch("pysolarcloud.control.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(PySolarCloudException, match="Task not successful t-1"),
+    ):
+        await control.wait_for_task("dev-1", "t-1")
+
+
+@pytest.mark.asyncio
 async def test_wait_for_task_polls_until_complete(auth, control):
     """A running task (command_status 2) is polled again until it completes."""
     running = _mock_response({"result_code": "1", "result_data": {"command_status": 2}})

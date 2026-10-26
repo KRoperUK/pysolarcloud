@@ -29,6 +29,18 @@ _DEVICE_TASK_ACCEPTED = "1"
 _EXPIRE_SECONDS = 120
 # Seconds between polls while a task is still running.
 _POLL_INTERVAL = 5
+# ``command_status`` of a param-setting task: 2 running, 8 success (OpenAPI Appendix /
+# live observation). Anything else is a failed task.
+_TASK_RUNNING = 2
+_TASK_SUCCESS = 8
+
+
+def _parse_command_status(raw: Any) -> int | None:
+    """Coerce a task ``command_status`` (number or quoted text) to an int; ``None`` if absent/unparseable."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 async def _read_all_with_fallback(
@@ -159,13 +171,16 @@ class Control:
             res.raise_for_status()
             data = await res.json()
             _LOGGER.debug("wait_for_task: %s", data)
-            if data.get("result_code") == "1" and data["result_data"]["command_status"] == 2:
+            # command_status arrives as a number or as quoted text ("8"); compare as an int
+            # so a finished task reported as text still returns its result (#121).
+            status = _parse_command_status((data.get("result_data") or {}).get("command_status"))
+            if data.get("result_code") == "1" and status == _TASK_RUNNING:
                 # Task is still running
                 if asyncio.get_running_loop().time() >= deadline:
                     raise PySolarCloudException(f"Timed out waiting for task {task_id} to complete after {timeout}s")
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
-            elif data.get("result_code") == "1" and data["result_data"]["command_status"] == 8:
+            elif data.get("result_code") == "1" and status == _TASK_SUCCESS:
                 return cast(list[dict[str, Any]], data["result_data"]["param_list"])
             else:
                 _LOGGER.error("Task not successful %s: %s", task_id, data)
@@ -174,7 +189,7 @@ class Control:
                 # a descriptive message.
                 if data.get("result_code") != "1":
                     raise PySolarCloudException.from_response(data)
-                raise PySolarCloudException(f"Task not succesful {task_id}: {data}")
+                raise PySolarCloudException(f"Task not successful {task_id}: {data}")
 
     async def async_read_parameters(
         self, device_uuid: str, param_list: list[str] | None = None
