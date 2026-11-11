@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.20.1](https://github.com/KRoperUK/pysolarcloud/compare/v0.20.0...v0.20.1) (2026-11-11)
+
+
+### Documentation
+
+* ground battery endpoint notes in the decompiled app ([44f8aaa](https://github.com/KRoperUK/pysolarcloud/commit/44f8aaaa987da6b0fdaeb4d7bf39e79f7baec9ec))
+* ground battery endpoint notes in the decompiled app ([0fe2f9e](https://github.com/KRoperUK/pysolarcloud/commit/0fe2f9eb63c4336c749a4e9ff7a2f4b93793327e))
+
 ## [0.20.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.19.0...v0.20.0) (2026-10-26)
 
 
