@@ -483,9 +483,10 @@ class UserAuth:
         :meth:`Plants.async_get_device_realtime`.
 
         .. note::
-            The app registers this path in ``AppUrlPath.java`` but builds its body
-            dynamically, so the exact request field names (``ps_key_list``,
-            ``point_id_list``, ``is_get_point_dict``) are taken from the sibling OpenAPI
+            The app registers this path in ``AppUrlPath.java`` but has no Java caller
+            for it in the shipped build (the caller lives in the Flutter layer), so the
+            exact request field names (``ps_key_list``, ``point_id_list``,
+            ``is_get_point_dict``) are taken from the sibling OpenAPI
             ``getDeviceRealTimeData`` shape rather than a named app builder, and are
             **unverified against a live device**.
         """
@@ -665,12 +666,14 @@ class UserAuth:
         ``minute_interval``. Returns the raw ``result_data`` dict.
 
         .. note::
-            The app's ``getPsBatteryInfo`` builder always sends ``query_type`` and
-            ``date_id`` alongside ``ps_id`` (with an optional ``minute_interval``). The
-            **parameter names** are verified against the app, but their accepted **values**
-            (which ``query_type`` selects which block; the ``date_id`` format) are
-            **unverified against a live device**, so they are left to the caller and only
-            included when supplied.
+            Parameter names verified against the app's ``HttpRequest.getPsBatteryInfo``
+            builder (``query_type``, ``ps_id``, ``date_id``, optional ``minute_interval``).
+            Observed ``query_type`` vocabulary in the app's chart caller
+            (``BalconyMSHomeDischargeChartDetailFragmentVM``): ``1`` day (``date_id``
+            ``yyyyMMdd``), ``2`` range, ``3`` month (``yyyyMM``), ``4`` year (``yyyy``),
+            ``5`` with ``minute_interval`` (``"5"``). Which ``query_type`` selects the
+            ESS info block is **unverified against a live device**, so values are left
+            to the caller and only included when supplied.
         """
         body: dict[str, Any] = {"ps_id": str(ps_id)}
         if query_type is not None:
@@ -694,8 +697,8 @@ class UserAuth:
     async def async_get_soc_by_sn(self, bt_sn: str) -> dict[str, Any]:
         """Return battery SoC for a specific battery serial (``querySocBySn``, #94).
 
-        Sends ``bt_sn`` (the app's battery-serial parameter name). Returns the raw
-        ``result_data`` dict.
+        Sends ``bt_sn`` — verified against the app's ``HttpRequest.querySocBySn``
+        builder. Returns the raw ``result_data`` dict.
         """
         data = await self.async_request(_SOC_BY_SN_PATH, {"bt_sn": str(bt_sn)})
         return dict(data.get("result_data") or {})
