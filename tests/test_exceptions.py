@@ -12,11 +12,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiohttp import ClientResponse
 
-from pysolarcloud import AuthError, PySolarCloudException, RateLimitError
+from pysolarcloud import AuthError, PySolarCloudException, RateLimitError, WhitelistError
 from pysolarcloud.plants import Plants
 
 # Documented codes → expected class (Appendix 2 / Appendix 9 result codes).
-AUTH_CODES = ["E00003", "E900", "E919", "E912", "E914"]
+AUTH_CODES = ["E00003", "E900", "E912", "E914"]
+# Portal whitelist rejections (issue #145): typed as WhitelistError, which stays an
+# AuthError so existing reauth handlers keep catching them.
+WHITELIST_CODES = ["E918", "E919"]
 RATE_LIMIT_CODES = ["E998", "E999"]
 
 
@@ -57,6 +60,25 @@ def test_from_response_maps_auth_codes(code):
     assert exc.result_msg == "dead creds"
 
 
+@pytest.mark.parametrize("code", WHITELIST_CODES)
+def test_from_response_maps_whitelist_codes(code):
+    """E918/E919 become WhitelistError: still an AuthError (compat), never a RateLimitError."""
+    exc = PySolarCloudException.from_response({"result_code": code, "result_msg": "not whitelisted"})
+    assert isinstance(exc, WhitelistError)
+    assert isinstance(exc, AuthError)
+    assert isinstance(exc, PySolarCloudException)
+    assert not isinstance(exc, RateLimitError)
+    assert exc.error == code
+    assert exc.result_msg == "not whitelisted"
+
+
+def test_from_response_whitelist_honours_legacy_error_key():
+    """The legacy ``{"error": ...}`` envelope classifies E918 the same way as result_code."""
+    exc = PySolarCloudException.from_response({"error": "E918"})
+    assert isinstance(exc, WhitelistError)
+    assert exc.error == "E918"
+
+
 @pytest.mark.parametrize("code", RATE_LIMIT_CODES)
 def test_from_response_maps_rate_limit_codes(code):
     """Quota/throttle codes become a RateLimitError, NOT an AuthError (they are transient)."""
@@ -90,7 +112,7 @@ def test_from_response_plain_string_is_base_exception():
     assert exc.error == "boom"
 
 
-@pytest.mark.parametrize("code", AUTH_CODES + RATE_LIMIT_CODES + ["E001"])
+@pytest.mark.parametrize("code", AUTH_CODES + WHITELIST_CODES + RATE_LIMIT_CODES + ["E001"])
 def test_from_response_all_caught_by_base(code):
     """Backward compat: every classified exception is caught by ``except PySolarCloudException``."""
     with pytest.raises(PySolarCloudException):

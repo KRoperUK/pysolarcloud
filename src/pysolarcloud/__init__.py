@@ -284,7 +284,13 @@ class Auth(AbstractAuth):
 # Documented ``result_code`` values that mean the credentials / authorization are dead and
 # the caller must re-authenticate (Appendix 2: API Error Code Definitions / Appendix 9).
 # These map to :class:`AuthError`.
-_AUTH_ERROR_CODES = frozenset({"E00003", "E900", "E919", "E912", "E914"})
+_AUTH_ERROR_CODES = frozenset({"E00003", "E900", "E912", "E914"})
+# Developer-Portal whitelist rejections (Appendix 2): the calling IP (E918) or user
+# account (E919) is not on the API application's whitelist. Re-authorizing cannot fix
+# a portal-config issue, so these map to :class:`WhitelistError` — an :class:`AuthError`
+# subclass, so existing ``except AuthError`` handlers keep catching them — letting
+# consumers tell "fix the portal whitelist and retry" apart from "re-authenticate".
+_WHITELIST_CODES = frozenset({"E918", "E919"})
 # Documented quota / throttle ``result_code`` values (Appendix 2 / Appendix 9). These are
 # transient — the caller should back off and retry rather than re-authenticate — so they map
 # to :class:`RateLimitError`, NOT :class:`AuthError`.
@@ -302,8 +308,9 @@ class PySolarCloudException(Exception):
     own ``AUTH_ERRORS`` sets.
 
     Prefer :meth:`from_response` at raise time: it returns the most specific subclass
-    (:class:`AuthError` / :class:`RateLimitError`) for documented result codes so consumers can
-    branch reauth-vs-retry by ``isinstance`` instead of maintaining a code list.
+    (:class:`AuthError` / :class:`WhitelistError` / :class:`RateLimitError`) for documented
+    result codes so consumers can branch reauth-vs-retry by ``isinstance`` instead of
+    maintaining a code list.
     """
 
     def __init__(self, err: dict[str, Any] | str) -> None:
@@ -327,10 +334,11 @@ class PySolarCloudException(Exception):
         """Return the most specific exception subclass for an iSolarCloud error response.
 
         Documented ``result_code`` values are mapped to typed subclasses (see
-        ``_AUTH_ERROR_CODES`` / ``_RATE_LIMIT_CODES``); everything else falls back to the base
-        ``PySolarCloudException``. This is the single chokepoint the business methods raise
-        through, so ``isinstance(exc, AuthError)`` / ``isinstance(exc, RateLimitError)`` reliably
-        classify the failure while ``.error`` still carries the raw code for backward compat.
+        ``_AUTH_ERROR_CODES`` / ``_WHITELIST_CODES`` / ``_RATE_LIMIT_CODES``); everything else
+        falls back to the base ``PySolarCloudException``. This is the single chokepoint the
+        business methods raise through, so ``isinstance(exc, AuthError)`` /
+        ``isinstance(exc, RateLimitError)`` reliably classify the failure while ``.error``
+        still carries the raw code for backward compat.
 
         A factory is used rather than mutating ``self.__class__`` in ``__init__`` because an
         instance cannot change its own class after construction.
@@ -338,6 +346,8 @@ class PySolarCloudException(Exception):
         # Match the code the same way __init__ derives ``.error`` so classification and the
         # exposed attribute never disagree.
         code = (err.get("error") or err.get("result_code")) if isinstance(err, dict) else err
+        if code in _WHITELIST_CODES:
+            return WhitelistError(err)
         if code in _AUTH_ERROR_CODES:
             return AuthError(err)
         if code in _RATE_LIMIT_CODES:
@@ -366,6 +376,18 @@ class AuthError(PySolarCloudException):
 
     A thin typed marker for downstream consumers that would rather catch a type than match
     ``.error`` against a set of result codes. ``.error`` still carries the raw code.
+    """
+
+
+class WhitelistError(AuthError):
+    """Rejected by the Developer-Portal IP/user whitelist (E918/E919), not dead credentials.
+
+    Re-authorizing cannot fix a whitelist rejection — the calling IP or user account must
+    be added to the API application's whitelist in the Developer Portal (or the whitelist
+    disabled), after which the same credentials work. A subclass of :class:`AuthError` so
+    existing ``except AuthError`` handlers keep catching these; consumers that need the
+    distinction (retry with a portal hint instead of triggering reauth) catch this type
+    first. ``.error`` still carries the raw code.
     """
 
 

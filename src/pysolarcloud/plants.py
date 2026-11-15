@@ -205,7 +205,7 @@ class Plants:
                     "id": str, # Numerical identifier of the measure point
                     "code": str, # Readable code of the measure point (see measure_points dict)
                     "value": float | str,
-                    "unit": str,
+                    "unit": str | None, # None when the response point_dict lacks the entry
                     "name": str, # Name of the measure point (in the specified language)
                 }
             }
@@ -551,7 +551,7 @@ class Plants:
                     "id": str, # Numerical identifier of the measure point
                     "code": str, # Readable code of the measure point (see measure_points dict)
                     "value": float | str,
-                    "unit": str,
+                    "unit": str | None, # None when the response point_dict lacks the entry
                     "name": str, # Name of the measure point (in the specified language)
                 }
             ]
@@ -667,10 +667,19 @@ class Plants:
         point_dict: dict[str, Any],
         measure_points: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        """Normalise a single ``p<id>`` value into ``{id, code, value, unit, name}``.
+
+        Shares the realtime point representation with
+        :meth:`UserAuth._format_point <pysolarcloud.user_auth.UserAuth._format_point>`:
+        numeric strings coerce to ``float``, anything else (display strings, ``None``,
+        unexpected server payloads) passes through verbatim, and ``unit``/``name`` are
+        ``None`` when the response ``point_dict`` lacks the entry. The only deliberate
+        split is the ``code`` key, resolved here from the measure-point catalog.
+        """
         v: float | str | None
         try:
             v = float(point_value) if point_value is not None else None
-        except ValueError:
+        except (TypeError, ValueError):
             v = point_value
         code_map = measure_points if measure_points is not None else self.measure_points
         return {
