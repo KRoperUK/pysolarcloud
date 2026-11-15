@@ -521,9 +521,14 @@ class UserAuth:
     def _format_point(point_id: str, point_value: Any, point_dict: dict[str, Any]) -> dict[str, Any]:
         """Normalise a single ``p<id>`` value into ``{id, value, unit, name}``.
 
-        Mirrors :meth:`Plants._format_measure_point` minus the code map (the user API has
-        no static measure-point name table), coercing numeric strings to ``float`` and
-        pulling ``point_unit`` / ``point_name`` from the response ``point_dict``.
+        Shares the realtime point representation with
+        :meth:`Plants._format_measure_point`: numeric strings coerce to ``float``,
+        anything else (display strings, ``None``, unexpected server payloads) passes
+        through verbatim, and ``unit``/``name`` are ``None`` when the response
+        ``point_dict`` lacks the entry. The only deliberate split is the ``code`` key,
+        which this path omits (the user API has no static measure-point name table —
+        :meth:`Plants._async_get_device_realtime_user_fallback` injects it when mapping
+        onto the OpenAPI shape).
         """
         v: float | str | None
         try:
