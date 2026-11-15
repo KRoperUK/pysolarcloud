@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.20.1](https://github.com/KRoperUK/pysolarcloud/compare/v0.20.0...v0.20.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* type E918/E919 whitelist rejections as WhitelistError ([6235a86](https://github.com/KRoperUK/pysolarcloud/commit/6235a86aec1e8a0af2c299e9d8deacae67e3b654))
+* type E918/E919 whitelist rejections as WhitelistError ([4c4391b](https://github.com/KRoperUK/pysolarcloud/commit/4c4391ba14b87e35143ee90cd6d8b11778accb48))
+* unify realtime point representation across OpenAPI and user paths ([cb4fff4](https://github.com/KRoperUK/pysolarcloud/commit/cb4fff45fe675ef0bb20cd0acf15dd3fe2d4a0e9))
+* unify realtime point representation across OpenAPI and user paths ([f76b78b](https://github.com/KRoperUK/pysolarcloud/commit/f76b78b1d1302ac6fb0ce85555f5908436edd3b7))
+
+
+### Documentation
+
+* ground battery endpoint notes in the decompiled app ([44f8aaa](https://github.com/KRoperUK/pysolarcloud/commit/44f8aaaa987da6b0fdaeb4d7bf39e79f7baec9ec))
+* ground battery endpoint notes in the decompiled app ([0fe2f9e](https://github.com/KRoperUK/pysolarcloud/commit/0fe2f9eb63c4336c749a4e9ff7a2f4b93793327e))
+
 ## [0.20.0](https://github.com/KRoperUK/pysolarcloud/compare/v0.19.0...v0.20.0) (2026-10-26)
 
 
