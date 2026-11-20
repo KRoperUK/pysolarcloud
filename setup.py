@@ -20,7 +20,7 @@ setup(
             "pytest",
             "pytest-asyncio",
             "pytest-cov",
-            "ruff==0.17.4",
+            "ruff==0.17.5",
             "mypy==2.4.1",
             # Loads a local .env for live tests (credentials); CI uses repo secrets.
             "python-dotenv",
